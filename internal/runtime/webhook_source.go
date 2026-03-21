@@ -60,7 +60,7 @@ func (s *WebhookSource) Run(ctx context.Context, handler UpdateHandler) error {
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
-	s.logger.Info("webhook source started", "addr", s.cfg.Addr, "path", s.cfg.Path)
+	s.logger.Info("источник webhook запущен", "addr", s.cfg.Addr, "path", s.cfg.Path)
 
 	err := server.ListenAndServe()
 	if errors.Is(err, http.ErrServerClosed) {
@@ -84,7 +84,7 @@ func (s *WebhookSource) newHTTPHandler(ctx context.Context, handler UpdateHandle
 				return
 			case update := <-queue:
 				if err := handler(workerCtx, update); err != nil {
-					s.logger.Error("webhook update handler failed", "type", update.UpdateType, "error", err.Error())
+					s.logger.Error("ошибка обработчика webhook-обновления", "type", update.UpdateType, "error", err.Error())
 				}
 			}
 		}
@@ -98,27 +98,27 @@ func (s *WebhookSource) newHTTPHandler(ctx context.Context, handler UpdateHandle
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		if ready.Load() {
 			w.WriteHeader(http.StatusOK)
-			_, _ = io.WriteString(w, "ready")
+			_, _ = io.WriteString(w, "готов")
 			return
 		}
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = io.WriteString(w, "not ready")
+		_, _ = io.WriteString(w, "не готов")
 	})
 
 	mux.HandleFunc(s.cfg.Path, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			http.Error(w, "метод не поддерживается", http.StatusMethodNotAllowed)
 			return
 		}
 
 		if s.cfg.Secret != "" && r.Header.Get(webhookSecretHeader) != s.cfg.Secret {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			http.Error(w, "неавторизованный запрос", http.StatusUnauthorized)
 			return
 		}
 
 		var update maxapi.Update
 		if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			http.Error(w, "некорректный запрос", http.StatusBadRequest)
 			return
 		}
 
@@ -127,7 +127,7 @@ func (s *WebhookSource) newHTTPHandler(ctx context.Context, handler UpdateHandle
 			w.WriteHeader(http.StatusOK)
 			_, _ = io.WriteString(w, "ok")
 		default:
-			http.Error(w, "queue is full", http.StatusServiceUnavailable)
+			http.Error(w, "очередь обработки переполнена", http.StatusServiceUnavailable)
 		}
 	})
 

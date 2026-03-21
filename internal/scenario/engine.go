@@ -74,14 +74,14 @@ func (e *Engine) HandleUpdate(ctx context.Context, upd maxapi.Update) error {
 		if upd.User == nil {
 			return nil
 		}
-		slog.Info("bot started", "user_id", upd.User.UserID, "payload", upd.Payload)
+		slog.Info("бот запущен пользователем", "user_id", upd.User.UserID, "payload", upd.Payload)
 		return e.showMainMenu(ctx, upd.User.UserID)
 	case "message_callback":
 		return e.handleCallback(ctx, upd)
 	case "message_created":
 		return e.handleMessage(ctx, upd)
 	default:
-		slog.Debug("skip update", "type", upd.UpdateType)
+		slog.Debug("обновление пропущено", "type", upd.UpdateType)
 		return nil
 	}
 }
@@ -93,10 +93,10 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 
 	userID := upd.Callback.User.UserID
 	payload := upd.Callback.Payload
-	slog.Info("callback received", "user_id", userID, "payload", payload)
+	slog.Info("получен callback", "user_id", userID, "payload", payload)
 
 	if err := e.client.AnswerCallback(ctx, upd.Callback.CallbackID, "Принято"); err != nil {
-		slog.Warn("callback answer failed", "error", err.Error())
+		slog.Warn("не удалось ответить на callback", "error", err.Error())
 	}
 
 	switch payload {
@@ -119,7 +119,7 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 		text, attachments := consentMessage()
 		return e.reply(ctx, userID, text, attachments)
 	case "menu:my_reports":
-		return e.sendText(ctx, userID, "Раздел \"Мои сообщения\" пока заглушка. Позже сюда подключим backend и реальные сообщения.", backToMenuKeyboard())
+		return e.sendText(ctx, userID, "Раздел \"Мои сообщения\" пока заглушка. Позже сюда подключим бэкенд и реальные сообщения.", backToMenuKeyboard())
 	case "report:consent_yes":
 		categories, err := e.loadCategories(ctx)
 		if err != nil {
@@ -256,9 +256,9 @@ func (e *Engine) showMainMenu(ctx context.Context, userID int64) error {
 func (e *Engine) finishDraft(ctx context.Context, userID int64) error {
 	session := e.session(userID)
 	reportNumber := fmt.Sprintf("DEV-%d", time.Now().Unix()%100000)
-	slog.Info("draft accepted", "user_id", userID, "report_number", reportNumber, "draft", fmt.Sprintf("%+v", session.Draft))
+	slog.Info("черновик принят", "user_id", userID, "report_number", reportNumber, "draft", fmt.Sprintf("%+v", session.Draft))
 	e.resetSession(userID)
-	return e.sendText(ctx, userID, "Сообщение принято в dev-режиме с номером "+reportNumber+".\n\nСейчас это демонстрационный приём без backend, но все введённые шаги и кнопки уже прошли через FSM и попали в лог терминала.", backToMenuKeyboard())
+	return e.sendText(ctx, userID, "Сообщение принято в dev-режиме с номером "+reportNumber+".\n\nСейчас это демонстрационный приём без бэкенда, но все введённые шаги и кнопки уже прошли через FSM и попали в лог терминала.", backToMenuKeyboard())
 }
 
 func (e *Engine) sendDraftSummary(ctx context.Context, userID int64) error {
@@ -384,15 +384,15 @@ func attachmentSummary(items []maxapi.AttachmentBody) ([]string, bool) {
 		case "contact":
 			var payload maxapi.ContactPayload
 			if err := json.Unmarshal(item.RawPayload, &payload); err == nil {
-				result = append(result, "- contact: "+payload.VCFPhone)
+				result = append(result, "- контакт: "+payload.VCFPhone)
 			} else {
-				result = append(result, "- contact")
+				result = append(result, "- контакт")
 			}
 		case "location":
 			if item.Latitude != nil && item.Longitude != nil {
-				result = append(result, fmt.Sprintf("- location: %.6f, %.6f", *item.Latitude, *item.Longitude))
+				result = append(result, fmt.Sprintf("- геопозиция: %.6f, %.6f", *item.Latitude, *item.Longitude))
 			} else {
-				result = append(result, "- location")
+				result = append(result, "- геопозиция")
 			}
 		default:
 			return nil, false
@@ -402,8 +402,8 @@ func attachmentSummary(items []maxapi.AttachmentBody) ([]string, bool) {
 }
 
 func logIncomingMessage(userID int64, text string, attachments []maxapi.AttachmentBody) {
-	slog.Info("message received", "user_id", userID, "text", text, "attachments_count", len(attachments))
+	slog.Info("получено сообщение", "user_id", userID, "text", text, "attachments_count", len(attachments))
 	for i, item := range attachments {
-		slog.Info("attachment received", "index", i, "type", item.Type, "raw", strings.TrimSpace(string(item.RawPayload)))
+		slog.Info("получено вложение", "index", i, "type", item.Type, "raw", strings.TrimSpace(string(item.RawPayload)))
 	}
 }

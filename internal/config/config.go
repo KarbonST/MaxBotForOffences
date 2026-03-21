@@ -80,7 +80,7 @@ func Load() (Config, error) {
 	}
 
 	if cfg.Token == "" {
-		return Config{}, fmt.Errorf("MAX_BOT_TOKEN is required")
+		return Config{}, fmt.Errorf("обязательная переменная MAX_BOT_TOKEN не задана (задайте env или укажите MAX_BOT_TOKEN=... в .env)")
 	}
 
 	if cfg.PollTimeout < 0 || cfg.PollTimeout > 90 {
@@ -161,9 +161,9 @@ func getenvBool(key string, fallback bool) bool {
 	}
 
 	switch value {
-	case "1", "true", "TRUE", "True", "yes", "YES", "on", "ON":
+	case "1", "true", "TRUE", "True", "yes", "YES", "on", "ON", "да", "ДА", "Да", "вкл", "ВКЛ", "Вкл":
 		return true
-	case "0", "false", "FALSE", "False", "no", "NO", "off", "OFF":
+	case "0", "false", "FALSE", "False", "no", "NO", "off", "OFF", "нет", "НЕТ", "Нет", "выкл", "ВЫКЛ", "Выкл":
 		return false
 	default:
 		return fallback

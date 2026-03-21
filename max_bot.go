@@ -19,9 +19,14 @@ import (
 )
 
 func main() {
+	if err := config.LoadDotEnv(".env"); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "ошибка загрузки .env: %v\n", err)
+		os.Exit(1)
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "config error: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "ошибка конфигурации: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -50,21 +55,21 @@ func main() {
 
 	updateHandler := func(handlerCtx context.Context, update maxapi.Update) error {
 		if deduper.Seen(update) {
-			slog.Debug("duplicate update skipped", "type", update.UpdateType)
+			slog.Debug("дубликат обновления пропущен", "type", update.UpdateType)
 			return nil
 		}
 		return engine.HandleUpdate(handlerCtx, update)
 	}
 
 	if info, err := client.GetMe(ctx); err != nil {
-		slog.Warn("could not fetch bot info", "error", err.Error())
+		slog.Warn("не удалось получить данные бота", "error", err.Error())
 	} else {
-		slog.Info("bot connected", "id", info.UserID, "name", info.Name, "username", info.Username)
+		slog.Info("бот подключен", "id", info.UserID, "name", info.Name, "username", info.Username)
 	}
 
 	source := makeSource(cfg, client, logger)
 	if err := source.Run(ctx, updateHandler); err != nil && !errors.Is(err, context.Canceled) {
-		slog.Error("source run failed", "mode", cfg.RunMode, "error", err.Error())
+		slog.Error("ошибка запуска источника обновлений", "mode", cfg.RunMode, "error", err.Error())
 		os.Exit(1)
 	}
 }

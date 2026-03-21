@@ -38,9 +38,9 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	if e.RequestID != "" {
-		return fmt.Sprintf("api %s %s returned %d request_id=%s body=%s", e.Method, e.Path, e.StatusCode, e.RequestID, e.Body)
+		return fmt.Sprintf("api %s %s вернул %d request_id=%s body=%s", e.Method, e.Path, e.StatusCode, e.RequestID, e.Body)
 	}
-	return fmt.Sprintf("api %s %s returned %d body=%s", e.Method, e.Path, e.StatusCode, e.Body)
+	return fmt.Sprintf("api %s %s вернул %d body=%s", e.Method, e.Path, e.StatusCode, e.Body)
 }
 
 func (e *APIError) Retryable() bool {
@@ -146,7 +146,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 	if requestBody != nil {
 		raw, err := json.Marshal(requestBody)
 		if err != nil {
-			return fmt.Errorf("marshal request: %w", err)
+			return fmt.Errorf("ошибка сериализации запроса: %w", err)
 		}
 		requestRaw = raw
 	}
@@ -159,7 +159,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 				return nil
 			}
 			if err := json.Unmarshal(rawResponse, responseBody); err != nil {
-				return fmt.Errorf("decode response: %w; body=%s", err, strings.TrimSpace(string(rawResponse)))
+				return fmt.Errorf("ошибка декодирования ответа: %w; body=%s", err, strings.TrimSpace(string(rawResponse)))
 			}
 			return nil
 		}
@@ -170,7 +170,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 
 		delay := c.backoffWithJitter(attempt)
 		c.logger.Warn(
-			"max api request retry",
+			"повтор запроса к MAX API",
 			"method", method,
 			"path", path,
 			"status", statusFromError(err),
@@ -185,7 +185,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 		}
 	}
 
-	return errors.New("unreachable retry loop")
+	return errors.New("внутренняя ошибка: недостижимое состояние цикла повторов")
 }
 
 func (c *Client) doOnce(ctx context.Context, method, endpoint, path string, requestRaw []byte) ([]byte, string, error) {
@@ -196,7 +196,7 @@ func (c *Client) doOnce(ctx context.Context, method, endpoint, path string, requ
 
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 	if err != nil {
-		return nil, "", fmt.Errorf("create request: %w", err)
+		return nil, "", fmt.Errorf("ошибка создания HTTP-запроса: %w", err)
 	}
 
 	req.Header.Set("Authorization", c.token)
@@ -206,14 +206,14 @@ func (c *Client) doOnce(ctx context.Context, method, endpoint, path string, requ
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, "", fmt.Errorf("request %s %s: %w", method, endpoint, err)
+		return nil, "", fmt.Errorf("ошибка запроса %s %s: %w", method, endpoint, err)
 	}
 	defer resp.Body.Close()
 
 	requestID := requestIDFromHeaders(resp.Header)
 	rawResp, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, requestID, fmt.Errorf("read response: %w", err)
+		return nil, requestID, fmt.Errorf("ошибка чтения ответа: %w", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -259,7 +259,7 @@ func (c *Client) backoffWithJitter(attempt int) time.Duration {
 		delay = c.retry.MaxDelay
 	}
 
-	// Adds up to 25% jitter to reduce synchronized retries.
+	// Добавляем джиттер до 25%, чтобы снизить риск синхронных ретраев.
 	jitterMax := delay / 4
 	if jitterMax <= 0 {
 		return delay
@@ -306,7 +306,7 @@ func compactBody(raw []byte) string {
 	if len(body) <= maxSize {
 		return body
 	}
-	return body[:maxSize] + "...(truncated)"
+	return body[:maxSize] + "...(сокращено)"
 }
 
 func coalesce(first, second string) string {
