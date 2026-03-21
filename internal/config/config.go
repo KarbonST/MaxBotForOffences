@@ -1,0 +1,174 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type Config struct {
+	Token      string
+	APIBaseURL string
+	RunMode    string
+
+	PollTimeout   int
+	PollLimit     int
+	PollOnce      bool
+	PollMaxCycles int
+	LogEmptyPolls bool
+
+	WebhookAddr      string
+	WebhookPath      string
+	WebhookSecret    string
+	WebhookQueueSize int
+	HTTPReadTimeout  time.Duration
+	HTTPWriteTimeout time.Duration
+	ShutdownTimeout  time.Duration
+
+	LogFormat string
+	LogLevel  string
+
+	APIMaxRetries int
+	APIRetryBase  time.Duration
+	APIRetryMax   time.Duration
+	DedupTTL      time.Duration
+	UpdateTypes   []string
+}
+
+func Load() (Config, error) {
+	cfg := Config{
+		Token:      os.Getenv("MAX_BOT_TOKEN"),
+		APIBaseURL: getenv("MAX_API_BASE", "https://platform-api.max.ru"),
+		RunMode:    strings.ToLower(getenv("MAX_RUN_MODE", "polling")),
+
+		PollTimeout:   getenvInt("MAX_POLL_TIMEOUT", 30),
+		PollLimit:     getenvInt("MAX_POLL_LIMIT", 100),
+		PollOnce:      getenvBool("MAX_POLL_ONCE", false),
+		PollMaxCycles: getenvInt("MAX_POLL_MAX_CYCLES", 0),
+		LogEmptyPolls: getenvBool("MAX_LOG_EMPTY_POLLS", false),
+
+		WebhookAddr:      getenv("MAX_WEBHOOK_ADDR", ":8080"),
+		WebhookPath:      getenv("MAX_WEBHOOK_PATH", "/webhook/max"),
+		WebhookSecret:    os.Getenv("MAX_WEBHOOK_SECRET"),
+		WebhookQueueSize: getenvInt("MAX_WEBHOOK_QUEUE_SIZE", 512),
+		HTTPReadTimeout:  getenvDuration("MAX_HTTP_READ_TIMEOUT", 10*time.Second),
+		HTTPWriteTimeout: getenvDuration("MAX_HTTP_WRITE_TIMEOUT", 10*time.Second),
+		ShutdownTimeout:  getenvDuration("MAX_SHUTDOWN_TIMEOUT", 10*time.Second),
+
+		LogFormat: strings.ToLower(getenv("LOG_FORMAT", "text")),
+		LogLevel:  strings.ToLower(getenv("LOG_LEVEL", "info")),
+
+		APIMaxRetries: getenvInt("MAX_API_MAX_RETRIES", 3),
+		APIRetryBase:  time.Duration(getenvInt("MAX_API_RETRY_BASE_MS", 250)) * time.Millisecond,
+		APIRetryMax:   time.Duration(getenvInt("MAX_API_RETRY_MAX_MS", 3000)) * time.Millisecond,
+		DedupTTL:      getenvDuration("MAX_DEDUP_TTL", 10*time.Minute),
+		UpdateTypes: []string{
+			"bot_started",
+			"message_created",
+			"message_callback",
+		},
+	}
+
+	if cfg.Token == "" {
+		return Config{}, fmt.Errorf("MAX_BOT_TOKEN is required")
+	}
+
+	if cfg.PollTimeout < 0 || cfg.PollTimeout > 90 {
+		cfg.PollTimeout = 30
+	}
+
+	if cfg.PollLimit < 1 || cfg.PollLimit > 1000 {
+		cfg.PollLimit = 100
+	}
+
+	if cfg.PollMaxCycles < 0 {
+		cfg.PollMaxCycles = 0
+	}
+
+	if cfg.RunMode != "polling" && cfg.RunMode != "webhook" {
+		cfg.RunMode = "polling"
+	}
+
+	if !strings.HasPrefix(cfg.WebhookPath, "/") {
+		cfg.WebhookPath = "/" + cfg.WebhookPath
+	}
+
+	if cfg.WebhookQueueSize < 1 {
+		cfg.WebhookQueueSize = 512
+	}
+
+	if cfg.LogFormat != "text" && cfg.LogFormat != "json" {
+		cfg.LogFormat = "text"
+	}
+
+	if cfg.APIMaxRetries < 1 {
+		cfg.APIMaxRetries = 1
+	}
+	if cfg.APIRetryBase <= 0 {
+		cfg.APIRetryBase = 250 * time.Millisecond
+	}
+	if cfg.APIRetryMax < cfg.APIRetryBase {
+		cfg.APIRetryMax = 3 * time.Second
+	}
+	if cfg.DedupTTL <= 0 {
+		cfg.DedupTTL = 10 * time.Minute
+	}
+
+	return cfg, nil
+}
+
+func getenv(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func getenvInt(key string, fallback int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+
+	return parsed
+}
+
+func getenvBool(key string, fallback bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	switch value {
+	case "1", "true", "TRUE", "True", "yes", "YES", "on", "ON":
+		return true
+	case "0", "false", "FALSE", "False", "no", "NO", "off", "OFF":
+		return false
+	default:
+		return fallback
+	}
+}
+
+func getenvDuration(key string, fallback time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	if d, err := time.ParseDuration(value); err == nil {
+		return d
+	}
+
+	if seconds, err := strconv.Atoi(value); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second
+	}
+
+	return fallback
+}
