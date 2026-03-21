@@ -1,0 +1,9 @@
+.git
+.gitignore
+.DS_Store
+.env
+.env.*
+bin
+*.exe
+.gocache
+.gomodcache

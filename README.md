@@ -20,6 +20,42 @@
 2. Запустить `reference_api`.
 3. Запустить бота с `MAX_BOT_TOKEN`.
 
+## Docker Compose
+
+Для локального запуска всего текущего контура есть [docker-compose.yml](docker-compose.yml):
+
+- `postgres` - база данных PostgreSQL;
+- `reference-api` - backend для справочников `categories` и `municipalities`;
+- `bot` - сам MAX-бот, который ходит в backend по адресу `http://reference-api:8090`.
+
+Подготовка:
+
+1. Скопируйте [compose.env.example](compose.env.example) в `.env`.
+2. Заполните `MAX_BOT_TOKEN`.
+3. Поднимите стек:
+
+```bash
+docker compose up --build
+```
+
+Полезные команды:
+
+```bash
+docker compose up --build -d
+docker compose logs -f bot
+docker compose logs -f reference-api
+docker compose down
+```
+
+Если нужно полностью пересоздать локальную БД со стартовыми справочниками:
+
+```bash
+docker compose down -v
+docker compose up --build
+```
+
+Стартовые таблицы и seed для локального запуска лежат в [001_reference_schema.sql](deploy/postgres/init/001_reference_schema.sql). Они нужны именно для docker-окружения и покрывают текущий backend справочников.
+
 PowerShell:
 
 ```powershell
@@ -77,6 +113,8 @@ curl http://127.0.0.1:8090/api/reference/municipalities
 - `municipalities(id, sorting, name, is_active)`
 
 API отдаёт только записи с `is_active = true`, отсортированные по `sorting`.
+
+При запуске через Docker `reference-api` автоматически подключается к контейнеру `postgres`, а бот обращается к нему по внутреннему DNS-имени `reference-api`.
 
 Ключевые ENV:
 
@@ -167,6 +205,9 @@ Retry/Dedup:
 - `max_bot.go` - точка входа бота MAX
 - `cmd/reference_api` - отдельный HTTP API для справочников из PostgreSQL
 - `internal/reference` - Postgres store, HTTP handler, клиент и кэш справочников
+- `deploy/postgres/init` - инициализация локальной PostgreSQL для Docker Compose
+- `Dockerfile` - multi-stage сборка для `bot` и `reference-api`
+- `docker-compose.yml` - локальный стек `postgres + reference-api + bot`
 - `internal/scenario` - FSM и шаблоны диалога бота
 - `internal/maxapi` - клиент официального MAX Bot API
 - `internal/runtime` - webhook/polling источники обновлений и deduplication

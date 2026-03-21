@@ -1,0 +1,83 @@
+name: max-bot-stack
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-maxbot}
+      POSTGRES_USER: ${POSTGRES_USER:-maxbot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-maxbot}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  reference-api:
+    build:
+      context: .
+      target: reference-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-maxbot}:${POSTGRES_PASSWORD:-maxbot}@postgres:5432/${POSTGRES_DB:-maxbot}?sslmode=disable
+      REFERENCE_API_ADDR: :8090
+      REFERENCE_API_READ_TIMEOUT: ${REFERENCE_API_READ_TIMEOUT:-5s}
+      REFERENCE_API_WRITE_TIMEOUT: ${REFERENCE_API_WRITE_TIMEOUT:-5s}
+      REFERENCE_API_SHUTDOWN_TIMEOUT: ${REFERENCE_API_SHUTDOWN_TIMEOUT:-10s}
+    ports:
+      - "${REFERENCE_API_PORT:-8090}:8090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8090/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  bot:
+    build:
+      context: .
+      target: bot
+    restart: unless-stopped
+    depends_on:
+      reference-api:
+        condition: service_healthy
+    environment:
+      MAX_BOT_TOKEN: ${MAX_BOT_TOKEN:-}
+      MAX_API_BASE: ${MAX_API_BASE:-https://platform-api.max.ru}
+      MAX_RUN_MODE: ${MAX_RUN_MODE:-polling}
+      MAX_POLL_TIMEOUT: ${MAX_POLL_TIMEOUT:-30}
+      MAX_POLL_LIMIT: ${MAX_POLL_LIMIT:-100}
+      MAX_POLL_ONCE: ${MAX_POLL_ONCE:-0}
+      MAX_POLL_MAX_CYCLES: ${MAX_POLL_MAX_CYCLES:-0}
+      MAX_LOG_EMPTY_POLLS: ${MAX_LOG_EMPTY_POLLS:-0}
+      MAX_WEBHOOK_ADDR: :8080
+      MAX_WEBHOOK_PATH: ${MAX_WEBHOOK_PATH:-/webhook/max}
+      MAX_WEBHOOK_SECRET: ${MAX_WEBHOOK_SECRET:-}
+      MAX_WEBHOOK_QUEUE_SIZE: ${MAX_WEBHOOK_QUEUE_SIZE:-512}
+      MAX_HTTP_READ_TIMEOUT: ${MAX_HTTP_READ_TIMEOUT:-10s}
+      MAX_HTTP_WRITE_TIMEOUT: ${MAX_HTTP_WRITE_TIMEOUT:-10s}
+      MAX_SHUTDOWN_TIMEOUT: ${MAX_SHUTDOWN_TIMEOUT:-10s}
+      MAX_API_MAX_RETRIES: ${MAX_API_MAX_RETRIES:-3}
+      MAX_API_RETRY_BASE_MS: ${MAX_API_RETRY_BASE_MS:-250}
+      MAX_API_RETRY_MAX_MS: ${MAX_API_RETRY_MAX_MS:-3000}
+      MAX_DEDUP_TTL: ${MAX_DEDUP_TTL:-10m}
+      REFERENCE_API_BASE: http://reference-api:8090
+      REFERENCE_API_TIMEOUT: ${REFERENCE_API_TIMEOUT:-5s}
+      REFERENCE_CACHE_TTL: ${REFERENCE_CACHE_TTL:-5m}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "${BOT_PORT:-8080}:8080"
+
+volumes:
+  postgres_data:
