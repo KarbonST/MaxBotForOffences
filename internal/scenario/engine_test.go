@@ -7,12 +7,29 @@ import (
 	"testing"
 
 	"max_bot/internal/maxapi"
+	"max_bot/internal/reference"
 )
 
 type senderMock struct {
 	mu              sync.Mutex
 	messages        []maxapi.NewMessageBody
 	callbackAnswers []string
+}
+
+type referenceProviderMock struct{}
+
+func (referenceProviderMock) Categories(context.Context) ([]reference.Item, error) {
+	return []reference.Item{
+		{ID: 11, Sorting: 1, Name: "Категория 1"},
+		{ID: 12, Sorting: 2, Name: "Категория 2"},
+	}, nil
+}
+
+func (referenceProviderMock) Municipalities(context.Context) ([]reference.Item, error) {
+	return []reference.Item{
+		{ID: 21, Sorting: 1, Name: "Муниципалитет 1"},
+		{ID: 22, Sorting: 2, Name: "Муниципалитет 2"},
+	}, nil
 }
 
 func (m *senderMock) SendMessage(_ context.Context, _ int64, body maxapi.NewMessageBody) error {
@@ -40,7 +57,7 @@ func (m *senderMock) lastText() string {
 
 func TestFlowHappyPathToConfirm(t *testing.T) {
 	mock := &senderMock{}
-	engine := New(mock)
+	engine := New(mock, referenceProviderMock{})
 	userID := int64(101)
 
 	steps := []maxapi.Update{
@@ -77,7 +94,7 @@ func TestFlowHappyPathToConfirm(t *testing.T) {
 
 func TestFlowValidationCategoryError(t *testing.T) {
 	mock := &senderMock{}
-	engine := New(mock)
+	engine := New(mock, referenceProviderMock{})
 	userID := int64(102)
 
 	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb1", "report:consent_yes")); err != nil {
@@ -98,7 +115,7 @@ func TestFlowValidationCategoryError(t *testing.T) {
 
 func TestFlowFallbackToMenuForUnknownState(t *testing.T) {
 	mock := &senderMock{}
-	engine := New(mock)
+	engine := New(mock, referenceProviderMock{})
 	userID := int64(103)
 
 	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "привет")); err != nil {

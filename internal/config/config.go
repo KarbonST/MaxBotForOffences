@@ -13,6 +13,10 @@ type Config struct {
 	APIBaseURL string
 	RunMode    string
 
+	ReferenceAPIBaseURL string
+	ReferenceAPITimeout time.Duration
+	ReferenceCacheTTL   time.Duration
+
 	PollTimeout   int
 	PollLimit     int
 	PollOnce      bool
@@ -42,6 +46,10 @@ func Load() (Config, error) {
 		Token:      os.Getenv("MAX_BOT_TOKEN"),
 		APIBaseURL: getenv("MAX_API_BASE", "https://platform-api.max.ru"),
 		RunMode:    strings.ToLower(getenv("MAX_RUN_MODE", "polling")),
+
+		ReferenceAPIBaseURL: getenv("REFERENCE_API_BASE", "http://127.0.0.1:8090"),
+		ReferenceAPITimeout: getenvDuration("REFERENCE_API_TIMEOUT", 5*time.Second),
+		ReferenceCacheTTL:   getenvDuration("REFERENCE_CACHE_TTL", 5*time.Minute),
 
 		PollTimeout:   getenvInt("MAX_POLL_TIMEOUT", 30),
 		PollLimit:     getenvInt("MAX_POLL_LIMIT", 100),
@@ -114,6 +122,12 @@ func Load() (Config, error) {
 	}
 	if cfg.DedupTTL <= 0 {
 		cfg.DedupTTL = 10 * time.Minute
+	}
+	if cfg.ReferenceAPITimeout <= 0 {
+		cfg.ReferenceAPITimeout = 5 * time.Second
+	}
+	if cfg.ReferenceCacheTTL <= 0 {
+		cfg.ReferenceCacheTTL = 5 * time.Minute
 	}
 
 	return cfg, nil

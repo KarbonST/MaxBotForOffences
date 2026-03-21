@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"max_bot/internal/maxapi"
+	"max_bot/internal/reference"
 )
 
 func mainMenuMessage() (string, []maxapi.AttachmentRequest) {
@@ -36,10 +37,10 @@ func legalMessage() (string, []maxapi.AttachmentRequest) {
 	return "Юридическая информация:\n- политика обработки персональных данных;\n- пользовательское соглашение.\n\nВ каркасе это заглушка, но переходы и кнопки уже работают.", backToMenuKeyboard()
 }
 
-func violationsMessage() (string, []maxapi.AttachmentRequest) {
+func violationsMessage(items []reference.Item) (string, []maxapi.AttachmentRequest) {
 	lines := []string{"Выберите нарушение или просто посмотрите справочник:"}
-	for i, item := range categories {
-		lines = append(lines, fmt.Sprintf("%d. %s", i+1, item))
+	for i, item := range items {
+		lines = append(lines, fmt.Sprintf("%d. %s", i+1, item.Name))
 	}
 	return strings.Join(lines, "\n"), []maxapi.AttachmentRequest{
 		inlineKeyboard(
@@ -65,18 +66,18 @@ func consentMessage() (string, []maxapi.AttachmentRequest) {
 	}
 }
 
-func categoriesPrompt() string {
+func categoriesPrompt(items []reference.Item) string {
 	lines := []string{"Список категорий. Отправьте номер категории сообщением в чат."}
-	for i, item := range categories {
-		lines = append(lines, fmt.Sprintf("%d. %s", i+1, item))
+	for i, item := range items {
+		lines = append(lines, fmt.Sprintf("%d. %s", i+1, item.Name))
 	}
 	return strings.Join(lines, "\n")
 }
 
-func municipalitiesPrompt() string {
+func municipalitiesPrompt(items []reference.Item) string {
 	lines := []string{"Список муниципалитетов. Отправьте номер муниципалитета сообщением в чат."}
-	for i, item := range municipalities {
-		lines = append(lines, fmt.Sprintf("%d. %s", i+1, item))
+	for i, item := range items {
+		lines = append(lines, fmt.Sprintf("%d. %s", i+1, item.Name))
 	}
 	return strings.Join(lines, "\n")
 }

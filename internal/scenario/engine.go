@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"max_bot/internal/maxapi"
+	"max_bot/internal/reference"
 )
 
 const (
@@ -31,6 +32,7 @@ var phoneRe = regexp.MustCompile(`^\d{10}$`)
 
 type Engine struct {
 	client   Sender
+	refData  reference.Provider
 	mu       sync.Mutex
 	sessions map[int64]*Session
 }
@@ -46,19 +48,22 @@ type Session struct {
 }
 
 type Draft struct {
-	Category      int
-	Municipality  int
-	Phone         string
-	Address       string
-	IncidentTime  string
-	Description   string
-	ExtraInfo     string
-	AttachmentLog []string
+	CategoryID       int
+	CategoryName     string
+	MunicipalityID   int
+	MunicipalityName string
+	Phone            string
+	Address          string
+	IncidentTime     string
+	Description      string
+	ExtraInfo        string
+	AttachmentLog    []string
 }
 
-func New(client Sender) *Engine {
+func New(client Sender, refData reference.Provider) *Engine {
 	return &Engine{
 		client:   client,
+		refData:  refData,
 		sessions: make(map[int64]*Session),
 	}
 }
@@ -104,7 +109,11 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 		text, attachments := legalMessage()
 		return e.reply(ctx, userID, text, attachments)
 	case "menu:violations":
-		text, attachments := violationsMessage()
+		categories, err := e.loadCategories(ctx)
+		if err != nil {
+			return e.sendReferenceLookupError(ctx, userID)
+		}
+		text, attachments := violationsMessage(categories)
 		return e.reply(ctx, userID, text, attachments)
 	case "menu:report":
 		text, attachments := consentMessage()
@@ -112,8 +121,12 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 	case "menu:my_reports":
 		return e.sendText(ctx, userID, "Раздел \"Мои сообщения\" пока заглушка. Позже сюда подключим backend и реальные сообщения.", backToMenuKeyboard())
 	case "report:consent_yes":
+		categories, err := e.loadCategories(ctx)
+		if err != nil {
+			return e.sendReferenceLookupError(ctx, userID)
+		}
 		e.setState(userID, stateReportCategory)
-		return e.sendText(ctx, userID, categoriesPrompt(), backToMenuKeyboard())
+		return e.sendText(ctx, userID, categoriesPrompt(categories), backToMenuKeyboard())
 	case "report:skip_media":
 		e.setState(userID, stateReportExtra)
 		return e.sendText(ctx, userID, "Напишите дополнительную информацию или нажмите \"Пропустить\".", extraInfoKeyboard())
@@ -148,19 +161,35 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 	session := e.session(userID)
 	switch session.State {
 	case stateReportCategory:
+		categories, err := e.loadCategories(ctx)
+		if err != nil {
+			return e.sendReferenceLookupError(ctx, userID)
+		}
 		index, ok := parseChoice(text, len(categories))
 		if !ok {
-			return e.sendText(ctx, userID, "Категория не найдена, отправьте номер от 1 до 12.", backToMenuKeyboard())
+			return e.sendText(ctx, userID, "Категория не найдена, отправьте номер из списка.", backToMenuKeyboard())
 		}
-		session.Draft.Category = index
+		selected := categories[index-1]
+		session.Draft.CategoryID = selected.ID
+		session.Draft.CategoryName = selected.Name
 		session.State = stateReportMunicipal
-		return e.sendText(ctx, userID, municipalitiesPrompt(), backToMenuKeyboard())
+		municipalities, err := e.loadMunicipalities(ctx)
+		if err != nil {
+			return e.sendReferenceLookupError(ctx, userID)
+		}
+		return e.sendText(ctx, userID, municipalitiesPrompt(municipalities), backToMenuKeyboard())
 	case stateReportMunicipal:
+		municipalities, err := e.loadMunicipalities(ctx)
+		if err != nil {
+			return e.sendReferenceLookupError(ctx, userID)
+		}
 		index, ok := parseChoice(text, len(municipalities))
 		if !ok {
 			return e.sendText(ctx, userID, "Муниципалитет не найден, отправьте номер из списка.", backToMenuKeyboard())
 		}
-		session.Draft.Municipality = index
+		selected := municipalities[index-1]
+		session.Draft.MunicipalityID = selected.ID
+		session.Draft.MunicipalityName = selected.Name
 		session.State = stateReportPhone
 		return e.sendText(ctx, userID, "Введите номер телефона в формате 10 цифр без +7/8 или отправьте контакт кнопкой ниже.", phoneKeyboard())
 	case stateReportPhone:
@@ -236,8 +265,8 @@ func (e *Engine) sendDraftSummary(ctx context.Context, userID int64) error {
 	session := e.session(userID)
 	lines := []string{
 		"Черновик сообщения готов.",
-		fmt.Sprintf("Категория: %s", categories[session.Draft.Category-1]),
-		fmt.Sprintf("Муниципалитет: %s", municipalities[session.Draft.Municipality-1]),
+		fmt.Sprintf("Категория: %s", session.Draft.CategoryName),
+		fmt.Sprintf("Муниципалитет: %s", session.Draft.MunicipalityName),
 		fmt.Sprintf("Телефон: %s", session.Draft.Phone),
 		fmt.Sprintf("Адрес: %s", session.Draft.Address),
 		fmt.Sprintf("Время: %s", session.Draft.IncidentTime),
@@ -263,6 +292,18 @@ func (e *Engine) sendText(ctx context.Context, userID int64, text string, attach
 		Text:        text,
 		Attachments: attachments,
 	})
+}
+
+func (e *Engine) loadCategories(ctx context.Context) ([]reference.Item, error) {
+	return e.refData.Categories(ctx)
+}
+
+func (e *Engine) loadMunicipalities(ctx context.Context) ([]reference.Item, error) {
+	return e.refData.Municipalities(ctx)
+}
+
+func (e *Engine) sendReferenceLookupError(ctx context.Context, userID int64) error {
+	return e.sendText(ctx, userID, "Не удалось загрузить справочники. Попробуйте ещё раз немного позже.", backToMenuKeyboard())
 }
 
 func (e *Engine) session(userID int64) *Session {

@@ -33,6 +33,12 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.APIMaxRetries != 3 {
 		t.Fatalf("unexpected retry default: %d", cfg.APIMaxRetries)
 	}
+	if cfg.ReferenceAPIBaseURL != "http://127.0.0.1:8090" {
+		t.Fatalf("unexpected reference api base: %q", cfg.ReferenceAPIBaseURL)
+	}
+	if cfg.ReferenceAPITimeout != 5*time.Second {
+		t.Fatalf("unexpected reference api timeout: %v", cfg.ReferenceAPITimeout)
+	}
 }
 
 func TestLoadNormalizesInvalidValues(t *testing.T) {
@@ -48,6 +54,8 @@ func TestLoadNormalizesInvalidValues(t *testing.T) {
 	t.Setenv("MAX_API_RETRY_BASE_MS", "0")
 	t.Setenv("MAX_API_RETRY_MAX_MS", "1")
 	t.Setenv("MAX_DEDUP_TTL", "0")
+	t.Setenv("REFERENCE_API_TIMEOUT", "0")
+	t.Setenv("REFERENCE_CACHE_TTL", "0")
 
 	cfg, err := Load()
 	if err != nil {
@@ -81,6 +89,12 @@ func TestLoadNormalizesInvalidValues(t *testing.T) {
 	if cfg.DedupTTL <= 0 {
 		t.Fatalf("expected positive dedup ttl, got %v", cfg.DedupTTL)
 	}
+	if cfg.ReferenceAPITimeout <= 0 {
+		t.Fatalf("expected positive reference api timeout, got %v", cfg.ReferenceAPITimeout)
+	}
+	if cfg.ReferenceCacheTTL <= 0 {
+		t.Fatalf("expected positive reference cache ttl, got %v", cfg.ReferenceCacheTTL)
+	}
 }
 
 func TestLoadDurationParsing(t *testing.T) {
@@ -89,6 +103,8 @@ func TestLoadDurationParsing(t *testing.T) {
 	t.Setenv("MAX_HTTP_WRITE_TIMEOUT", "4")
 	t.Setenv("MAX_SHUTDOWN_TIMEOUT", "5s")
 	t.Setenv("MAX_DEDUP_TTL", "7s")
+	t.Setenv("REFERENCE_API_TIMEOUT", "6s")
+	t.Setenv("REFERENCE_CACHE_TTL", "8s")
 
 	cfg, err := Load()
 	if err != nil {
@@ -106,5 +122,11 @@ func TestLoadDurationParsing(t *testing.T) {
 	}
 	if cfg.DedupTTL != 7*time.Second {
 		t.Fatalf("expected dedup ttl 7s, got %v", cfg.DedupTTL)
+	}
+	if cfg.ReferenceAPITimeout != 6*time.Second {
+		t.Fatalf("expected reference api timeout 6s, got %v", cfg.ReferenceAPITimeout)
+	}
+	if cfg.ReferenceCacheTTL != 8*time.Second {
+		t.Fatalf("expected reference cache ttl 8s, got %v", cfg.ReferenceCacheTTL)
 	}
 }

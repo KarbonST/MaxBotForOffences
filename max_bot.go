@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"max_bot/internal/config"
 	"max_bot/internal/maxapi"
+	"max_bot/internal/reference"
 	botruntime "max_bot/internal/runtime"
 	"max_bot/internal/scenario"
 )
@@ -38,7 +40,12 @@ func main() {
 		},
 	})
 
-	engine := scenario.New(client)
+	referenceClient := reference.NewClient(cfg.ReferenceAPIBaseURL, reference.ClientOptions{
+		HTTPClient: &http.Client{Timeout: cfg.ReferenceAPITimeout},
+	})
+	referenceProvider := reference.NewCachedProvider(referenceClient, cfg.ReferenceCacheTTL)
+
+	engine := scenario.New(client, referenceProvider)
 	deduper := botruntime.NewDeduper(cfg.DedupTTL)
 
 	updateHandler := func(handlerCtx context.Context, update maxapi.Update) error {

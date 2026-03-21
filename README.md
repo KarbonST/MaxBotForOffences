@@ -5,7 +5,20 @@
 - `polling` для локальной отладки;
 - `webhook` для приближения к production.
 
+Справочники категорий и муниципалитетов больше не захардкожены в коде бота. Теперь бот читает их через REST API, а API поднимается отдельным процессом и берёт данные из PostgreSQL.
+
 ## Быстрый старт
+
+Сейчас проект запускается в 2 процесса:
+
+1. `reference_api` поднимает REST API над таблицами `categories` и `municipalities` в PostgreSQL.
+2. `max_bot` запускает самого бота и читает справочники через HTTP.
+
+Минимальный порядок запуска:
+
+1. Поднять PostgreSQL со схемой, где есть таблицы `categories` и `municipalities`.
+2. Запустить `reference_api`.
+3. Запустить бота с `MAX_BOT_TOKEN`.
 
 PowerShell:
 
@@ -13,11 +26,65 @@ PowerShell:
 $env:GO111MODULE = "on"
 $env:GOCACHE = "$PWD\\.gocache"
 $env:GOMODCACHE = "$PWD\\.gomodcache"
+$env:REFERENCE_API_BASE = "http://127.0.0.1:8090"
 $env:MAX_BOT_TOKEN = "your_token"
 go run .
 ```
 
 По умолчанию используется `MAX_RUN_MODE=polling`.
+
+## Reference API
+
+Отдельный процесс, который читает таблицы `categories` и `municipalities` из PostgreSQL и публикует:
+
+- `GET /healthz`
+- `GET /api/reference/categories`
+- `GET /api/reference/municipalities`
+
+Запуск:
+
+```powershell
+$env:DATABASE_URL = "postgres://user:password@localhost:5432/maxbot?sslmode=disable"
+$env:REFERENCE_API_ADDR = ":8090"
+go run ./cmd/reference_api
+```
+
+Примеры запросов:
+
+```bash
+curl http://127.0.0.1:8090/healthz
+curl http://127.0.0.1:8090/api/reference/categories
+curl http://127.0.0.1:8090/api/reference/municipalities
+```
+
+Формат ответа:
+
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "sorting": 1,
+      "name": "Благоустройство"
+    }
+  ]
+}
+```
+
+Ожидаемая схема таблиц:
+
+- `categories(id, sorting, name, is_active)`
+- `municipalities(id, sorting, name, is_active)`
+
+API отдаёт только записи с `is_active = true`, отсортированные по `sorting`.
+
+Ключевые ENV:
+
+- `DATABASE_URL` (required)
+- `REFERENCE_API_ADDR` (default: `:8090`)
+- `REFERENCE_API_READ_TIMEOUT`
+- `REFERENCE_API_WRITE_TIMEOUT`
+- `REFERENCE_API_SHUTDOWN_TIMEOUT`
 
 ## Режим Polling
 
@@ -61,6 +128,9 @@ go run .
 - `MAX_BOT_TOKEN` (required)
 - `MAX_API_BASE` (default: `https://platform-api.max.ru`)
 - `MAX_RUN_MODE` (`polling` or `webhook`)
+- `REFERENCE_API_BASE` (default: `http://127.0.0.1:8090`)
+- `REFERENCE_API_TIMEOUT`
+- `REFERENCE_CACHE_TTL`
 
 Polling:
 
@@ -92,6 +162,15 @@ Retry/Dedup:
 - `MAX_API_RETRY_MAX_MS`
 - `MAX_DEDUP_TTL` (duration)
 
+## Структура проекта
+
+- `max_bot.go` - точка входа бота MAX
+- `cmd/reference_api` - отдельный HTTP API для справочников из PostgreSQL
+- `internal/reference` - Postgres store, HTTP handler, клиент и кэш справочников
+- `internal/scenario` - FSM и шаблоны диалога бота
+- `internal/maxapi` - клиент официального MAX Bot API
+- `internal/runtime` - webhook/polling источники обновлений и deduplication
+
 ## Проверка
 
 ```powershell
@@ -100,4 +179,4 @@ go test ./...
 
 ## Текущее ограничение
 
-Сценарии и сессии пока in-memory. Интеграция с backend/БД в этот этап не включена.
+Сценарии и сессии пока in-memory. В PostgreSQL через REST API сейчас вынесены только справочники категорий и муниципалитетов; создание обращений и работа с пользовательскими сообщениями ещё не подключены к backend.
