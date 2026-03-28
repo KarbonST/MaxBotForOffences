@@ -13,9 +13,15 @@ type Config struct {
 	APIBaseURL string
 	RunMode    string
 
-	ReferenceAPIBaseURL string
-	ReferenceAPITimeout time.Duration
-	ReferenceCacheTTL   time.Duration
+	ReferenceAPIBaseURL   string
+	ReferenceAPITimeout   time.Duration
+	ReferenceCacheTTL     time.Duration
+	ReportPipelineEnabled bool
+	ReportDatabaseURL     string
+	ReportOutboxDir       string
+	ReportOutboxQueueSize int
+	ReportOutboxRetryBase time.Duration
+	ReportOutboxRetryMax  time.Duration
 
 	PollTimeout   int
 	PollLimit     int
@@ -47,9 +53,15 @@ func Load() (Config, error) {
 		APIBaseURL: getenv("MAX_API_BASE", "https://platform-api.max.ru"),
 		RunMode:    strings.ToLower(getenv("MAX_RUN_MODE", "polling")),
 
-		ReferenceAPIBaseURL: getenv("REFERENCE_API_BASE", "http://127.0.0.1:8090"),
-		ReferenceAPITimeout: getenvDuration("REFERENCE_API_TIMEOUT", 5*time.Second),
-		ReferenceCacheTTL:   getenvDuration("REFERENCE_CACHE_TTL", 5*time.Minute),
+		ReferenceAPIBaseURL:   getenv("REFERENCE_API_BASE", "http://127.0.0.1:8090"),
+		ReferenceAPITimeout:   getenvDuration("REFERENCE_API_TIMEOUT", 5*time.Second),
+		ReferenceCacheTTL:     getenvDuration("REFERENCE_CACHE_TTL", 5*time.Minute),
+		ReportPipelineEnabled: getenvBool("REPORT_PIPELINE_ENABLED", true),
+		ReportDatabaseURL:     strings.TrimSpace(getenv("REPORT_DATABASE_URL", os.Getenv("DATABASE_URL"))),
+		ReportOutboxDir:       getenv("REPORT_OUTBOX_DIR", "var/report_outbox"),
+		ReportOutboxQueueSize: getenvInt("REPORT_OUTBOX_QUEUE_SIZE", 256),
+		ReportOutboxRetryBase: getenvDuration("REPORT_OUTBOX_RETRY_BASE", time.Second),
+		ReportOutboxRetryMax:  getenvDuration("REPORT_OUTBOX_RETRY_MAX", 30*time.Second),
 
 		PollTimeout:   getenvInt("MAX_POLL_TIMEOUT", 30),
 		PollLimit:     getenvInt("MAX_POLL_LIMIT", 100),
@@ -128,6 +140,18 @@ func Load() (Config, error) {
 	}
 	if cfg.ReferenceCacheTTL <= 0 {
 		cfg.ReferenceCacheTTL = 5 * time.Minute
+	}
+	if cfg.ReportOutboxQueueSize < 1 {
+		cfg.ReportOutboxQueueSize = 256
+	}
+	if cfg.ReportOutboxRetryBase <= 0 {
+		cfg.ReportOutboxRetryBase = time.Second
+	}
+	if cfg.ReportOutboxRetryMax < cfg.ReportOutboxRetryBase {
+		cfg.ReportOutboxRetryMax = 30 * time.Second
+	}
+	if strings.TrimSpace(cfg.ReportOutboxDir) == "" {
+		cfg.ReportOutboxDir = "var/report_outbox"
 	}
 
 	return cfg, nil

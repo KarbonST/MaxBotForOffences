@@ -13,6 +13,7 @@ import (
 
 	"max_bot/internal/maxapi"
 	"max_bot/internal/reference"
+	"max_bot/internal/report"
 )
 
 const (
@@ -31,10 +32,11 @@ const (
 var phoneRe = regexp.MustCompile(`^\d{10}$`)
 
 type Engine struct {
-	client   Sender
-	refData  reference.Provider
-	mu       sync.Mutex
-	sessions map[int64]*Session
+	client     Sender
+	refData    reference.Provider
+	reportSink ReportSink
+	mu         sync.Mutex
+	sessions   map[int64]*Session
 }
 
 type Sender interface {
@@ -43,8 +45,10 @@ type Sender interface {
 }
 
 type Session struct {
-	State string
-	Draft Draft
+	State     string
+	StartedAt time.Time
+	Draft     Draft
+	Trace     []report.DialogStep
 }
 
 type Draft struct {
@@ -60,13 +64,36 @@ type Draft struct {
 	AttachmentLog    []string
 }
 
-func New(client Sender, refData reference.Provider) *Engine {
-	return &Engine{
-		client:   client,
-		refData:  refData,
-		sessions: make(map[int64]*Session),
+type ReportSink interface {
+	Store(context.Context, report.DialogPayload) error
+}
+
+type Option func(*Engine)
+
+func WithReportSink(sink ReportSink) Option {
+	return func(e *Engine) {
+		if sink != nil {
+			e.reportSink = sink
+		}
 	}
 }
+
+func New(client Sender, refData reference.Provider, options ...Option) *Engine {
+	engine := &Engine{
+		client:     client,
+		refData:    refData,
+		reportSink: noopReportSink{},
+		sessions:   make(map[int64]*Session),
+	}
+	for _, option := range options {
+		option(engine)
+	}
+	return engine
+}
+
+type noopReportSink struct{}
+
+func (noopReportSink) Store(context.Context, report.DialogPayload) error { return nil }
 
 func (e *Engine) HandleUpdate(ctx context.Context, upd maxapi.Update) error {
 	switch upd.UpdateType {
@@ -93,6 +120,13 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 
 	userID := upd.Callback.User.UserID
 	payload := upd.Callback.Payload
+	session := e.session(userID)
+	e.appendTrace(userID, report.DialogStep{
+		At:      time.Now().UTC(),
+		Kind:    "callback",
+		State:   session.State,
+		Payload: payload,
+	})
 	slog.Info("получен callback", "user_id", userID, "payload", payload)
 
 	if err := e.client.AnswerCallback(ctx, upd.Callback.CallbackID, "Принято"); err != nil {
@@ -153,12 +187,19 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 	attachments := upd.Message.Body.Attachments
 
 	logIncomingMessage(userID, text, attachments)
+	session := e.session(userID)
+	e.appendTrace(userID, report.DialogStep{
+		At:              time.Now().UTC(),
+		Kind:            "message",
+		State:           session.State,
+		Text:            text,
+		AttachmentTypes: attachmentTypes(attachments),
+	})
 
 	if text == "/start" || strings.EqualFold(text, "меню") {
 		return e.showMainMenu(ctx, userID)
 	}
 
-	session := e.session(userID)
 	switch session.State {
 	case stateReportCategory:
 		categories, err := e.loadCategories(ctx)
@@ -255,10 +296,18 @@ func (e *Engine) showMainMenu(ctx context.Context, userID int64) error {
 
 func (e *Engine) finishDraft(ctx context.Context, userID int64) error {
 	session := e.session(userID)
-	reportNumber := fmt.Sprintf("DEV-%d", time.Now().Unix()%100000)
-	slog.Info("черновик принят", "user_id", userID, "report_number", reportNumber, "draft", fmt.Sprintf("%+v", session.Draft))
+
+	completedAt := time.Now().UTC()
+	reportNumber := fmt.Sprintf("DEV-%d", completedAt.UnixNano())
+	payload := e.buildDialogPayload(userID, reportNumber, completedAt, session)
+	if err := e.reportSink.Store(ctx, payload); err != nil {
+		slog.Error("не удалось сохранить диалог в outbox", "user_id", userID, "report_number", reportNumber, "error", err.Error())
+		return e.sendText(ctx, userID, "Не удалось сохранить сообщение. Попробуйте отправить ещё раз немного позже.", confirmKeyboard())
+	}
+
+	slog.Info("черновик принят", "user_id", userID, "report_number", reportNumber, "dedup_key", payload.DedupKey)
 	e.resetSession(userID)
-	return e.sendText(ctx, userID, "Сообщение принято в dev-режиме с номером "+reportNumber+".\n\nСейчас это демонстрационный приём без бэкенда, но все введённые шаги и кнопки уже прошли через FSM и попали в лог терминала.", backToMenuKeyboard())
+	return e.sendText(ctx, userID, "Сообщение принято в dev-режиме с номером "+reportNumber+".\n\nДиалог упакован в JSON и поставлен в очередь отправки в PostgreSQL.", backToMenuKeyboard())
 }
 
 func (e *Engine) sendDraftSummary(ctx context.Context, userID int64) error {
@@ -312,7 +361,10 @@ func (e *Engine) session(userID int64) *Session {
 
 	s, ok := e.sessions[userID]
 	if !ok {
-		s = &Session{State: stateMainMenu}
+		s = &Session{
+			State:     stateMainMenu,
+			StartedAt: time.Now().UTC(),
+		}
 		e.sessions[userID] = s
 	}
 	return s
@@ -321,7 +373,10 @@ func (e *Engine) session(userID int64) *Session {
 func (e *Engine) resetSession(userID int64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.sessions[userID] = &Session{State: stateMainMenu}
+	e.sessions[userID] = &Session{
+		State:     stateMainMenu,
+		StartedAt: time.Now().UTC(),
+	}
 }
 
 func (e *Engine) setState(userID int64, state string) {
@@ -329,10 +384,56 @@ func (e *Engine) setState(userID int64, state string) {
 	defer e.mu.Unlock()
 	s, ok := e.sessions[userID]
 	if !ok {
-		s = &Session{}
+		s = &Session{StartedAt: time.Now().UTC()}
 		e.sessions[userID] = s
 	}
 	s.State = state
+}
+
+func (e *Engine) appendTrace(userID int64, step report.DialogStep) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	s, ok := e.sessions[userID]
+	if !ok {
+		s = &Session{
+			State:     stateMainMenu,
+			StartedAt: time.Now().UTC(),
+		}
+		e.sessions[userID] = s
+	}
+	s.Trace = append(s.Trace, step)
+}
+
+func (e *Engine) buildDialogPayload(userID int64, reportNumber string, completedAt time.Time, session *Session) report.DialogPayload {
+	startedAt := session.StartedAt
+	if startedAt.IsZero() {
+		startedAt = completedAt
+	}
+
+	payload := report.DialogPayload{
+		SchemaVersion: report.CurrentSchemaVersion,
+		Source:        "max_bot",
+		UserID:        userID,
+		ReportNumber:  reportNumber,
+		CreatedAt:     startedAt.UTC(),
+		CompletedAt:   completedAt.UTC(),
+		Draft: report.DialogDraft{
+			CategoryID:       session.Draft.CategoryID,
+			CategoryName:     session.Draft.CategoryName,
+			MunicipalityID:   session.Draft.MunicipalityID,
+			MunicipalityName: session.Draft.MunicipalityName,
+			Phone:            session.Draft.Phone,
+			Address:          session.Draft.Address,
+			IncidentTime:     session.Draft.IncidentTime,
+			Description:      session.Draft.Description,
+			ExtraInfo:        session.Draft.ExtraInfo,
+			AttachmentLog:    append([]string(nil), session.Draft.AttachmentLog...),
+		},
+		Steps: append([]report.DialogStep(nil), session.Trace...),
+	}
+	payload.Normalize(completedAt)
+	return payload
 }
 
 func parseChoice(text string, max int) (int, bool) {
@@ -399,6 +500,18 @@ func attachmentSummary(items []maxapi.AttachmentBody) ([]string, bool) {
 		}
 	}
 	return result, true
+}
+
+func attachmentTypes(items []maxapi.AttachmentBody) []string {
+	if len(items) == 0 {
+		return nil
+	}
+
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		result = append(result, item.Type)
+	}
+	return result
 }
 
 func logIncomingMessage(userID int64, text string, attachments []maxapi.AttachmentBody) {

@@ -39,6 +39,15 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ReferenceAPITimeout != 5*time.Second {
 		t.Fatalf("unexpected reference api timeout: %v", cfg.ReferenceAPITimeout)
 	}
+	if !cfg.ReportPipelineEnabled {
+		t.Fatalf("expected report pipeline enabled by default")
+	}
+	if cfg.ReportOutboxDir != "var/report_outbox" {
+		t.Fatalf("unexpected report outbox dir: %q", cfg.ReportOutboxDir)
+	}
+	if cfg.ReportOutboxQueueSize != 256 {
+		t.Fatalf("unexpected report outbox queue: %d", cfg.ReportOutboxQueueSize)
+	}
 }
 
 func TestLoadNormalizesInvalidValues(t *testing.T) {
@@ -56,6 +65,10 @@ func TestLoadNormalizesInvalidValues(t *testing.T) {
 	t.Setenv("MAX_DEDUP_TTL", "0")
 	t.Setenv("REFERENCE_API_TIMEOUT", "0")
 	t.Setenv("REFERENCE_CACHE_TTL", "0")
+	t.Setenv("REPORT_OUTBOX_QUEUE_SIZE", "0")
+	t.Setenv("REPORT_OUTBOX_RETRY_BASE", "0")
+	t.Setenv("REPORT_OUTBOX_RETRY_MAX", "1ms")
+	t.Setenv("REPORT_OUTBOX_DIR", "   ")
 
 	cfg, err := Load()
 	if err != nil {
@@ -95,6 +108,18 @@ func TestLoadNormalizesInvalidValues(t *testing.T) {
 	if cfg.ReferenceCacheTTL <= 0 {
 		t.Fatalf("expected positive reference cache ttl, got %v", cfg.ReferenceCacheTTL)
 	}
+	if cfg.ReportOutboxQueueSize != 256 {
+		t.Fatalf("expected report outbox queue fallback, got %d", cfg.ReportOutboxQueueSize)
+	}
+	if cfg.ReportOutboxRetryBase <= 0 {
+		t.Fatalf("expected positive report outbox retry base, got %v", cfg.ReportOutboxRetryBase)
+	}
+	if cfg.ReportOutboxRetryMax < cfg.ReportOutboxRetryBase {
+		t.Fatalf("expected report outbox retry max >= base, got base=%v max=%v", cfg.ReportOutboxRetryBase, cfg.ReportOutboxRetryMax)
+	}
+	if cfg.ReportOutboxDir != "var/report_outbox" {
+		t.Fatalf("expected report outbox dir fallback, got %q", cfg.ReportOutboxDir)
+	}
 }
 
 func TestLoadDurationParsing(t *testing.T) {
@@ -105,6 +130,8 @@ func TestLoadDurationParsing(t *testing.T) {
 	t.Setenv("MAX_DEDUP_TTL", "7s")
 	t.Setenv("REFERENCE_API_TIMEOUT", "6s")
 	t.Setenv("REFERENCE_CACHE_TTL", "8s")
+	t.Setenv("REPORT_OUTBOX_RETRY_BASE", "2s")
+	t.Setenv("REPORT_OUTBOX_RETRY_MAX", "9")
 
 	cfg, err := Load()
 	if err != nil {
@@ -128,5 +155,26 @@ func TestLoadDurationParsing(t *testing.T) {
 	}
 	if cfg.ReferenceCacheTTL != 8*time.Second {
 		t.Fatalf("expected reference cache ttl 8s, got %v", cfg.ReferenceCacheTTL)
+	}
+	if cfg.ReportOutboxRetryBase != 2*time.Second {
+		t.Fatalf("expected report outbox retry base 2s, got %v", cfg.ReportOutboxRetryBase)
+	}
+	if cfg.ReportOutboxRetryMax != 9*time.Second {
+		t.Fatalf("expected report outbox retry max 9s, got %v", cfg.ReportOutboxRetryMax)
+	}
+}
+
+func TestLoadReportDatabaseFallback(t *testing.T) {
+	t.Setenv("MAX_BOT_TOKEN", "token")
+	t.Setenv("REPORT_DATABASE_URL", "")
+	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost:5432/maxbot?sslmode=disable")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.ReportDatabaseURL != "postgres://user:pass@localhost:5432/maxbot?sslmode=disable" {
+		t.Fatalf("unexpected report database url fallback: %q", cfg.ReportDatabaseURL)
 	}
 }

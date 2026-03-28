@@ -1,6 +1,8 @@
 .env
 .env.*
+!.env.example
 bin/
 *.exe
 .gocache/
 .gomodcache/
+var/

@@ -8,12 +8,18 @@ import (
 
 	"max_bot/internal/maxapi"
 	"max_bot/internal/reference"
+	"max_bot/internal/report"
 )
 
 type senderMock struct {
 	mu              sync.Mutex
 	messages        []maxapi.NewMessageBody
 	callbackAnswers []string
+}
+
+type reportSinkMock struct {
+	mu       sync.Mutex
+	payloads []report.DialogPayload
 }
 
 type referenceProviderMock struct{}
@@ -53,6 +59,19 @@ func (m *senderMock) lastText() string {
 		return ""
 	}
 	return m.messages[len(m.messages)-1].Text
+}
+
+func (m *reportSinkMock) Store(_ context.Context, payload report.DialogPayload) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.payloads = append(m.payloads, payload)
+	return nil
+}
+
+func (m *reportSinkMock) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.payloads)
 }
 
 func TestFlowHappyPathToConfirm(t *testing.T) {
@@ -128,6 +147,39 @@ func TestFlowFallbackToMenuForUnknownState(t *testing.T) {
 	}
 	if !strings.Contains(mock.lastText(), "Главное меню") {
 		t.Fatalf("expected main menu response, got %q", mock.lastText())
+	}
+}
+
+func TestFlowSendDraftStoresDialogPayload(t *testing.T) {
+	mock := &senderMock{}
+	reportMock := &reportSinkMock{}
+	engine := New(mock, referenceProviderMock{}, WithReportSink(reportMock))
+	userID := int64(104)
+
+	steps := []maxapi.Update{
+		callbackUpdate(userID, "cb1", "report:consent_yes"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "2"),
+		textUpdate(userID, "9991234567"),
+		textUpdate(userID, "ул. Мира, дом 1"),
+		textUpdate(userID, "ночь"),
+		textUpdate(userID, "Описание нарушения"),
+		callbackUpdate(userID, "cb2", "report:skip_media"),
+		callbackUpdate(userID, "cb3", "report:skip_extra"),
+		callbackUpdate(userID, "cb4", "report:send"),
+	}
+
+	for _, step := range steps {
+		if err := engine.HandleUpdate(context.Background(), step); err != nil {
+			t.Fatalf("HandleUpdate() error = %v", err)
+		}
+	}
+
+	if reportMock.count() != 1 {
+		t.Fatalf("expected 1 stored payload, got %d", reportMock.count())
+	}
+	if !strings.Contains(mock.lastText(), "поставлен в очередь отправки в PostgreSQL") {
+		t.Fatalf("expected queue confirmation text, got %q", mock.lastText())
 	}
 }
 

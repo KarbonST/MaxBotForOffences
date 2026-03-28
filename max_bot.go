@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"max_bot/internal/config"
 	"max_bot/internal/maxapi"
 	"max_bot/internal/reference"
+	"max_bot/internal/report"
 	botruntime "max_bot/internal/runtime"
 	"max_bot/internal/scenario"
 )
@@ -50,7 +52,46 @@ func main() {
 	})
 	referenceProvider := reference.NewCachedProvider(referenceClient, cfg.ReferenceCacheTTL)
 
-	engine := scenario.New(client, referenceProvider)
+	engineOptions := make([]scenario.Option, 0, 1)
+	closers := make([]io.Closer, 0, 1)
+	defer closeAll(closers, logger)
+
+	if cfg.ReportPipelineEnabled {
+		if cfg.ReportDatabaseURL == "" {
+			logger.Warn("pipeline диалогов отключен: не задан REPORT_DATABASE_URL (или DATABASE_URL)")
+		} else {
+			postgresSink, err := report.NewPostgresSink(cfg.ReportDatabaseURL)
+			if err != nil {
+				logger.Error("не удалось инициализировать postgres sink диалогов", "error", err.Error())
+				os.Exit(1)
+			}
+			closers = append(closers, postgresSink)
+
+			outbox, err := report.NewOutbox(report.OutboxConfig{
+				Dir:       cfg.ReportOutboxDir,
+				QueueSize: cfg.ReportOutboxQueueSize,
+				RetryBase: cfg.ReportOutboxRetryBase,
+				RetryMax:  cfg.ReportOutboxRetryMax,
+			}, postgresSink, logger)
+			if err != nil {
+				logger.Error("не удалось инициализировать outbox диалогов", "error", err.Error())
+				os.Exit(1)
+			}
+			if err := outbox.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				logger.Error("не удалось запустить outbox диалогов", "error", err.Error())
+				os.Exit(1)
+			}
+
+			engineOptions = append(engineOptions, scenario.WithReportSink(outbox))
+			logger.Info(
+				"pipeline диалогов включен",
+				"outbox_dir", cfg.ReportOutboxDir,
+				"outbox_queue", cfg.ReportOutboxQueueSize,
+			)
+		}
+	}
+
+	engine := scenario.New(client, referenceProvider, engineOptions...)
 	deduper := botruntime.NewDeduper(cfg.DedupTTL)
 
 	updateHandler := func(handlerCtx context.Context, update maxapi.Update) error {
@@ -71,6 +112,17 @@ func main() {
 	if err := source.Run(ctx, updateHandler); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("ошибка запуска источника обновлений", "mode", cfg.RunMode, "error", err.Error())
 		os.Exit(1)
+	}
+}
+
+func closeAll(closers []io.Closer, logger *slog.Logger) {
+	for _, closer := range closers {
+		if closer == nil {
+			continue
+		}
+		if err := closer.Close(); err != nil {
+			logger.Warn("ошибка закрытия ресурса", "error", err.Error())
+		}
 	}
 }
 

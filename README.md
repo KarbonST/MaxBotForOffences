@@ -159,6 +159,17 @@ go run .
 - `GET /readyz`
 - `POST /webhook/max` (или ваш `MAX_WEBHOOK_PATH`)
 
+## JSON Outbox и PostgreSQL
+
+При нажатии кнопки `Отправить` (`report:send`) бот:
+
+1. Формирует JSON-пакет завершённого диалога (черновик + шаги пользователя).
+2. Сохраняет его в файловый outbox (`pending`).
+3. Асинхронно отправляет в PostgreSQL в таблицу `dialog_reports`.
+4. После успеха переносит JSON в `sent`, при некорректном JSON переносит в `failed`.
+
+Таблица `dialog_reports` создаётся автоматически при старте бота, также для Docker добавлен SQL-файл [002_dialog_reports.sql](deploy/postgres/init/002_dialog_reports.sql).
+
 ## Ключевые ENV
 
 Базовые:
@@ -200,6 +211,15 @@ Retry/Dedup:
 - `MAX_API_RETRY_MAX_MS`
 - `MAX_DEDUP_TTL` (duration)
 
+Диалоги/Outbox:
+
+- `REPORT_PIPELINE_ENABLED` (`true/false`)
+- `REPORT_DATABASE_URL` (если пусто, pipeline отключается)
+- `REPORT_OUTBOX_DIR` (default: `var/report_outbox`)
+- `REPORT_OUTBOX_QUEUE_SIZE`
+- `REPORT_OUTBOX_RETRY_BASE` (duration)
+- `REPORT_OUTBOX_RETRY_MAX` (duration)
+
 ## Структура проекта
 
 - `max_bot.go` - точка входа бота MAX
@@ -211,6 +231,7 @@ Retry/Dedup:
 - `internal/scenario` - FSM и шаблоны диалога бота
 - `internal/maxapi` - клиент официального MAX Bot API
 - `internal/runtime` - webhook/polling источники обновлений и deduplication
+- `internal/report` - JSON payload, файловый outbox и PostgreSQL sink для завершённых диалогов
 
 ## Проверка
 
@@ -220,4 +241,4 @@ go test ./...
 
 ## Текущее ограничение
 
-Сценарии и сессии пока in-memory. В PostgreSQL через REST API сейчас вынесены только справочники категорий и муниципалитетов; создание обращений и работа с пользовательскими сообщениями ещё не подключены к backend.
+FSM и пользовательские сессии всё ещё in-memory. Сохранение в PostgreSQL сейчас реализовано как технический контур через JSON outbox (`dialog_reports`) без интеграции с доменным backend API обращений.
