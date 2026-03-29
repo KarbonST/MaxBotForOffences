@@ -1,32 +1,56 @@
 # MAX Bot Playground
 
-Минимальный каркас чат-бота MAX на Go с двумя режимами запуска:
+Go-проект для MAX-бота и backend API под ТЗ по обращениям о правонарушениях.
 
-- `polling` для локальной отладки;
-- `webhook` для приближения к production.
+Сейчас в проекте есть 3 основных контура:
 
-Справочники категорий и муниципалитетов больше не захардкожены в коде бота. Теперь бот читает их через REST API, а API поднимается отдельным процессом и берёт данные из PostgreSQL.
+- `bot` - MAX-бот с FSM-сценарием подачи обращения;
+- `core_api` - backend API для справочников и обращений;
+- `postgres` - целевая БД на основе присланной схемы `users/messages/files/...`.
 
-## Быстрый старт
+Дополнительно оставлен технический raw-контур:
 
-Сейчас проект запускается в 2 процесса:
+- `dialog_reports` - JSON-слепки завершённых диалогов;
+- файловый outbox - чтобы не терять сырой диалог до нормализации в основную БД.
 
-1. `reference_api` поднимает REST API над таблицами `categories` и `municipalities` в PostgreSQL.
-2. `max_bot` запускает самого бота и читает справочники через HTTP.
+## Что уже умеет проект
 
-Минимальный порядок запуска:
+- Бот ведёт пользователя по шагам: категория -> муниципалитет -> телефон -> адрес -> время -> описание -> вложения -> доп. информация -> подтверждение.
+- Категории и муниципалитеты берутся из PostgreSQL через REST API, а не из хардкода.
+- После `report:send` бот:
+  1. сохраняет raw-слепок диалога в `dialog_reports`;
+  2. создаёт реальное обращение в таблице `messages`;
+  3. создаёт/обновляет пользователя в `users`;
+  4. пишет стартовое событие в `messages_history`.
+- Backend уже отдаёт API, на которое можно опирать frontend и бота:
+  - `GET /api/reference/categories`
+  - `GET /api/reference/municipalities`
+  - `POST /api/reports`
+  - `GET /api/reports`
+  - `GET /api/reports/by-user/{maxUserId}`
+  - `GET /api/reports/{id}`
 
-1. Поднять PostgreSQL со схемой, где есть таблицы `categories` и `municipalities`.
-2. Запустить `reference_api`.
-3. Запустить бота с `MAX_BOT_TOKEN`.
+## Архитектура
 
-## Docker Compose
+```text
+MAX -> bot -> core_api -> PostgreSQL
+             \-> dialog_reports (raw snapshot / outbox)
 
-Для локального запуска всего текущего контура есть [docker-compose.yml](docker-compose.yml):
+frontend -> core_api -> PostgreSQL
+```
 
-- `postgres` - база данных PostgreSQL;
-- `reference-api` - backend для справочников `categories` и `municipalities`;
-- `bot` - сам MAX-бот, который ходит в backend по адресу `http://reference-api:8090`.
+Правило источника истины:
+
+- `users`, `messages`, `messages_history`, `files`, `clarification_requests` - основная бизнес-модель;
+- `dialog_reports` - только технический raw/audit слой.
+
+## Локальный запуск через Docker Compose
+
+Локальный стек описан в [docker-compose.yml](docker-compose.yml):
+
+- `postgres`
+- `core-api`
+- `bot`
 
 Подготовка:
 
@@ -41,204 +65,179 @@ docker compose up --build
 Полезные команды:
 
 ```bash
-docker compose up --build -d
+docker compose logs -f core-api
 docker compose logs -f bot
-docker compose logs -f reference-api
 docker compose down
+docker compose down -v
 ```
 
-Если нужно полностью пересоздать локальную БД со стартовыми справочниками:
+При первом старте PostgreSQL инициализируется из:
+
+- [000_core_schema.sql](deploy/postgres/init/000_core_schema.sql) - основная схема под ТЗ;
+- [001_reference_schema.sql](deploy/postgres/init/001_reference_schema.sql) - seed категорий и муниципалитетов;
+- [002_dialog_reports.sql](deploy/postgres/init/002_dialog_reports.sql) - raw-таблица слепков диалога.
+
+## Быстрый запуск без Docker
+
+Нужна PostgreSQL с применённой схемой и сидом.
+
+### 1. Запуск backend API
 
 ```bash
-docker compose down -v
-docker compose up --build
+export DATABASE_URL="postgres://maxbot:maxbot@127.0.0.1:5432/maxbot?sslmode=disable"
+export CORE_API_ADDR=":8091"
+go run ./cmd/core_api
 ```
 
-Стартовые таблицы и seed для локального запуска лежат в [001_reference_schema.sql](deploy/postgres/init/001_reference_schema.sql). Они нужны именно для docker-окружения и покрывают текущий backend справочников.
+### 2. Запуск бота
 
-PowerShell:
-
-```powershell
-$env:GO111MODULE = "on"
-$env:GOCACHE = "$PWD\\.gocache"
-$env:GOMODCACHE = "$PWD\\.gomodcache"
-$env:REFERENCE_API_BASE = "http://127.0.0.1:8090"
-$env:MAX_BOT_TOKEN = "your_token"
+```bash
+export MAX_BOT_TOKEN="your_token"
+export MAX_RUN_MODE="polling"
+export REFERENCE_API_BASE="http://127.0.0.1:8091"
+export CORE_API_BASE="http://127.0.0.1:8091"
+export REPORT_PIPELINE_ENABLED="true"
+export REPORT_DATABASE_URL="postgres://maxbot:maxbot@127.0.0.1:5432/maxbot?sslmode=disable"
 go run .
 ```
 
-По умолчанию используется `MAX_RUN_MODE=polling`.
+## Core API
 
-## Reference API
+`core_api` - основной backend для бота и будущего frontend.
 
-Отдельный процесс, который читает таблицы `categories` и `municipalities` из PostgreSQL и публикует:
+### Endpoint-ы
 
 - `GET /healthz`
 - `GET /api/reference/categories`
 - `GET /api/reference/municipalities`
+- `POST /api/reports`
+- `GET /api/reports`
+- `GET /api/reports/by-user/{maxUserId}`
+- `GET /api/reports/{id}`
 
-Запуск:
+### Создание обращения
 
-```powershell
-$env:DATABASE_URL = "postgres://user:password@localhost:5432/maxbot?sslmode=disable"
-$env:REFERENCE_API_ADDR = ":8090"
-go run ./cmd/reference_api
-```
-
-Примеры запросов:
+Пример запроса:
 
 ```bash
-curl http://127.0.0.1:8090/healthz
-curl http://127.0.0.1:8090/api/reference/categories
-curl http://127.0.0.1:8090/api/reference/municipalities
+curl -X POST http://127.0.0.1:8091/api/reports \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "dialog_dedup_key": "dlg-777:raw-1",
+    "max_user_id": 777,
+    "category_id": 1,
+    "municipality_id": 2,
+    "phone": "9991234567",
+    "address": "ул. Мира, 1",
+    "incident_time": "ночь",
+    "description": "Описание нарушения",
+    "additional_info": "Доп. сведения"
+  }'
 ```
 
-Формат ответа:
+Пример ответа:
 
 ```json
 {
-  "items": [
-    {
-      "id": 1,
-      "sorting": 1,
-      "name": "Благоустройство"
-    }
-  ]
+  "id": 15,
+  "report_number": "15",
+  "status": "moderation",
+  "stage": "sended",
+  "user_id": 11,
+  "max_user_id": 777,
+  "created_at": "2026-03-29T10:00:00Z",
+  "sended_at": "2026-03-29T10:00:00Z",
+  "updated_at": "2026-03-29T10:00:00Z"
 }
 ```
 
-Ожидаемая схема таблиц:
+### Что делает backend при `POST /api/reports`
 
-- `categories(id, sorting, name, is_active)`
-- `municipalities(id, sorting, name, is_active)`
+- валидирует и нормализует входные данные;
+- ищет/создаёт пользователя по `users.max_id`;
+- создаёт запись в `messages` со статусом `moderation` и этапом `sended`;
+- пишет событие в `messages_history`;
+- если передан `dialog_dedup_key`, связывает raw-запись из `dialog_reports` с созданным `messages.id`.
 
-API отдаёт только записи с `is_active = true`, отсортированные по `sorting`.
+## Raw snapshot: dialog_reports
 
-При запуске через Docker `reference-api` автоматически подключается к контейнеру `postgres`, а бот обращается к нему по внутреннему DNS-имени `reference-api`.
+Таблица `dialog_reports` не заменяет основную модель. Она нужна для:
 
-Ключевые ENV:
+- аудита завершённых диалогов;
+- повторной обработки, если нормализация в `messages` временно упала;
+- дедупликации финальной отправки.
 
-- `DATABASE_URL` (required)
-- `REFERENCE_API_ADDR` (default: `:8090`)
-- `REFERENCE_API_READ_TIMEOUT`
-- `REFERENCE_API_WRITE_TIMEOUT`
-- `REFERENCE_API_SHUTDOWN_TIMEOUT`
+Схема raw-таблицы сейчас хранит:
 
-## Режим Polling
+- `dedup_key`
+- `dialog_id`
+- `user_id`
+- `report_number`
+- `message_id`
+- `normalized_at`
+- `payload JSONB`
 
-```powershell
-$env:MAX_RUN_MODE = "polling"
-$env:MAX_POLL_TIMEOUT = "30"
-$env:MAX_POLL_LIMIT = "100"
-$env:MAX_POLL_ONCE = "0"
-$env:MAX_POLL_MAX_CYCLES = "0"
-$env:MAX_LOG_EMPTY_POLLS = "1"
-go run .
-```
+То есть связь теперь такая:
 
-Короткий прогон (один цикл):
+`dialog_reports.payload` -> технический слепок  
+`messages` -> реальное обращение для работы системы
 
-```powershell
-$env:MAX_POLL_ONCE = "1"
-go run .
-```
+## ENV
 
-## Режим Webhook
+Бот:
 
-```powershell
-$env:MAX_RUN_MODE = "webhook"
-$env:MAX_WEBHOOK_ADDR = ":8080"
-$env:MAX_WEBHOOK_PATH = "/webhook/max"
-$env:MAX_WEBHOOK_SECRET = "optional_secret"
-go run .
-```
-
-Служебные endpoint-ы в webhook режиме:
-
-- `GET /healthz`
-- `GET /readyz`
-- `POST /webhook/max` (или ваш `MAX_WEBHOOK_PATH`)
-
-## JSON Outbox и PostgreSQL
-
-При нажатии кнопки `Отправить` (`report:send`) бот:
-
-1. Формирует JSON-пакет завершённого диалога (черновик + шаги пользователя).
-2. Сохраняет его в файловый outbox (`pending`).
-3. Асинхронно отправляет в PostgreSQL в таблицу `dialog_reports`.
-4. После успеха переносит JSON в `sent`, при некорректном JSON переносит в `failed`.
-
-Таблица `dialog_reports` создаётся автоматически при старте бота, также для Docker добавлен SQL-файл [002_dialog_reports.sql](deploy/postgres/init/002_dialog_reports.sql).
-
-## Ключевые ENV
-
-Базовые:
-
-- `MAX_BOT_TOKEN` (required)
-- `MAX_API_BASE` (default: `https://platform-api.max.ru`)
-- `MAX_RUN_MODE` (`polling` or `webhook`)
-- `REFERENCE_API_BASE` (default: `http://127.0.0.1:8090`)
+- `MAX_BOT_TOKEN` - обязателен
+- `MAX_RUN_MODE` - `polling` или `webhook`
+- `MAX_API_BASE` - base URL MAX API
+- `REFERENCE_API_BASE` - где бот берёт справочники, по умолчанию `http://127.0.0.1:8091`
 - `REFERENCE_API_TIMEOUT`
 - `REFERENCE_CACHE_TTL`
-
-Polling:
-
-- `MAX_POLL_TIMEOUT` (seconds)
-- `MAX_POLL_LIMIT`
-- `MAX_POLL_ONCE` (`0/1`)
-- `MAX_POLL_MAX_CYCLES` (0 = unlimited)
-- `MAX_LOG_EMPTY_POLLS` (`0/1`)
-
-Webhook/HTTP:
-
-- `MAX_WEBHOOK_ADDR`
-- `MAX_WEBHOOK_PATH`
-- `MAX_WEBHOOK_SECRET`
-- `MAX_WEBHOOK_QUEUE_SIZE`
-- `MAX_HTTP_READ_TIMEOUT` (duration, e.g. `10s`, or seconds as integer)
-- `MAX_HTTP_WRITE_TIMEOUT`
-- `MAX_SHUTDOWN_TIMEOUT`
-
-Логи:
-
-- `LOG_FORMAT` (`text` or `json`)
-- `LOG_LEVEL` (`debug`, `info`, `warn`, `error`)
-
-Retry/Dedup:
-
-- `MAX_API_MAX_RETRIES`
-- `MAX_API_RETRY_BASE_MS`
-- `MAX_API_RETRY_MAX_MS`
-- `MAX_DEDUP_TTL` (duration)
-
-Диалоги/Outbox:
-
-- `REPORT_PIPELINE_ENABLED` (`true/false`)
-- `REPORT_DATABASE_URL` (если пусто, pipeline отключается)
-- `REPORT_OUTBOX_DIR` (default: `var/report_outbox`)
+- `CORE_API_BASE` - backend API обращений, по умолчанию `http://127.0.0.1:8091`
+- `CORE_API_TIMEOUT`
+- `REPORT_PIPELINE_ENABLED`
+- `REPORT_DATABASE_URL`
+- `REPORT_OUTBOX_DIR`
 - `REPORT_OUTBOX_QUEUE_SIZE`
-- `REPORT_OUTBOX_RETRY_BASE` (duration)
-- `REPORT_OUTBOX_RETRY_MAX` (duration)
+- `REPORT_OUTBOX_RETRY_BASE`
+- `REPORT_OUTBOX_RETRY_MAX`
+
+Backend:
+
+- `DATABASE_URL` - обязателен для `core_api`
+- `CORE_API_ADDR`
+- `CORE_API_READ_TIMEOUT`
+- `CORE_API_WRITE_TIMEOUT`
+- `CORE_API_SHUTDOWN_TIMEOUT`
 
 ## Структура проекта
 
-- `max_bot.go` - точка входа бота MAX
-- `cmd/reference_api` - отдельный HTTP API для справочников из PostgreSQL
-- `internal/reference` - Postgres store, HTTP handler, клиент и кэш справочников
-- `deploy/postgres/init` - инициализация локальной PostgreSQL для Docker Compose
-- `Dockerfile` - multi-stage сборка для `bot` и `reference-api`
-- `docker-compose.yml` - локальный стек `postgres + reference-api + bot`
-- `internal/scenario` - FSM и шаблоны диалога бота
-- `internal/maxapi` - клиент официального MAX Bot API
-- `internal/runtime` - webhook/polling источники обновлений и deduplication
-- `internal/report` - JSON payload, файловый outbox и PostgreSQL sink для завершённых диалогов
+- [max_bot.go](max_bot.go) - точка входа MAX-бота
+- [cmd/core_api](cmd/core_api) - основной backend API
+- [cmd/reference_api](cmd/reference_api) - legacy/standalone API только для справочников
+- [internal/reporting](internal/reporting) - доменная модель обращений, Postgres store, HTTP handler, HTTP client, тесты
+- [internal/reference](internal/reference) - справочники из PostgreSQL
+- [internal/scenario](internal/scenario) - FSM сценария бота
+- [internal/report](internal/report) - raw JSON payload, outbox и PostgreSQL sink
+- [deploy/postgres/init](deploy/postgres/init) - init SQL для локального окружения
+- [docker-compose.yml](docker-compose.yml) - локальный стек `postgres + core-api + bot`
 
-## Проверка
+## Тесты
 
-```powershell
+```bash
 go test ./...
 ```
 
-## Текущее ограничение
+Покрыты:
 
-FSM и пользовательские сессии всё ещё in-memory. Сохранение в PostgreSQL сейчас реализовано как технический контур через JSON outbox (`dialog_reports`) без интеграции с доменным backend API обращений.
+- нормализация и валидация `CreateReportRequest`;
+- запись обращения в `users/messages/messages_history`;
+- HTTP handler `core_api`;
+- FSM финального шага отправки;
+- конфиг и runtime-слой.
+
+## Текущие ограничения
+
+- Пользовательские сессии бота всё ещё in-memory.
+- Вложения пока не нормализуются в таблицу `files`.
+- Раздел "Мои сообщения" в самом боте ещё не подключён к backend API.
+- Статусы, уточнения и уведомления реализованы пока не полностью.

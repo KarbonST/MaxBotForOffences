@@ -6,3 +6,4 @@ bin/
 .gocache/
 .gomodcache/
 var/
+.idea/
