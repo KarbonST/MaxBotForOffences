@@ -8,9 +8,12 @@ CREATE TABLE IF NOT EXISTS dialog_reports (
     source TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
     completed_at TIMESTAMPTZ NOT NULL,
+    message_id BIGINT,
+    normalized_at TIMESTAMPTZ,
     payload JSONB NOT NULL,
     inserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_dialog_reports_user_id ON dialog_reports (user_id);
+CREATE INDEX IF NOT EXISTS idx_dialog_reports_message_id ON dialog_reports (message_id);
 CREATE INDEX IF NOT EXISTS idx_dialog_reports_completed_at ON dialog_reports (completed_at DESC);
