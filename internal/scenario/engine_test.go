@@ -5,10 +5,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"max_bot/internal/maxapi"
 	"max_bot/internal/reference"
 	"max_bot/internal/report"
+	"max_bot/internal/reporting"
 )
 
 type senderMock struct {
@@ -20,6 +22,12 @@ type senderMock struct {
 type reportSinkMock struct {
 	mu       sync.Mutex
 	payloads []report.DialogPayload
+}
+
+type reportCreatorMock struct {
+	mu       sync.Mutex
+	requests []reporting.CreateReportRequest
+	result   *reporting.CreatedReport
 }
 
 type referenceProviderMock struct{}
@@ -72,6 +80,22 @@ func (m *reportSinkMock) count() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.payloads)
+}
+
+func (m *reportCreatorMock) CreateReport(_ context.Context, req reporting.CreateReportRequest) (*reporting.CreatedReport, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.requests = append(m.requests, req)
+	if m.result != nil {
+		return m.result, nil
+	}
+	return &reporting.CreatedReport{
+		ID:           15,
+		ReportNumber: "15",
+		Status:       "moderation",
+		Stage:        "sended",
+		CreatedAt:    time.Now().UTC(),
+	}, nil
 }
 
 func TestFlowHappyPathToConfirm(t *testing.T) {
@@ -153,7 +177,8 @@ func TestFlowFallbackToMenuForUnknownState(t *testing.T) {
 func TestFlowSendDraftStoresDialogPayload(t *testing.T) {
 	mock := &senderMock{}
 	reportMock := &reportSinkMock{}
-	engine := New(mock, referenceProviderMock{}, WithReportSink(reportMock))
+	creatorMock := &reportCreatorMock{}
+	engine := New(mock, referenceProviderMock{}, WithReportSink(reportMock), WithReportCreator(creatorMock))
 	userID := int64(104)
 
 	steps := []maxapi.Update{
@@ -178,8 +203,14 @@ func TestFlowSendDraftStoresDialogPayload(t *testing.T) {
 	if reportMock.count() != 1 {
 		t.Fatalf("expected 1 stored payload, got %d", reportMock.count())
 	}
-	if !strings.Contains(mock.lastText(), "поставлен в очередь отправки в PostgreSQL") {
-		t.Fatalf("expected queue confirmation text, got %q", mock.lastText())
+	if len(creatorMock.requests) != 1 {
+		t.Fatalf("expected 1 create report request, got %d", len(creatorMock.requests))
+	}
+	if creatorMock.requests[0].DialogDedupKey == "" {
+		t.Fatalf("expected dialog dedup key to be passed to creator")
+	}
+	if !strings.Contains(mock.lastText(), "Сообщение принято с номером 15") {
+		t.Fatalf("expected final report confirmation text, got %q", mock.lastText())
 	}
 }
 

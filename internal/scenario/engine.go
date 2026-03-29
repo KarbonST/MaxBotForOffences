@@ -14,6 +14,7 @@ import (
 	"max_bot/internal/maxapi"
 	"max_bot/internal/reference"
 	"max_bot/internal/report"
+	"max_bot/internal/reporting"
 )
 
 const (
@@ -32,11 +33,12 @@ const (
 var phoneRe = regexp.MustCompile(`^\d{10}$`)
 
 type Engine struct {
-	client     Sender
-	refData    reference.Provider
-	reportSink ReportSink
-	mu         sync.Mutex
-	sessions   map[int64]*Session
+	client        Sender
+	refData       reference.Provider
+	reportSink    ReportSink
+	reportCreator ReportCreator
+	mu            sync.Mutex
+	sessions      map[int64]*Session
 }
 
 type Sender interface {
@@ -68,6 +70,10 @@ type ReportSink interface {
 	Store(context.Context, report.DialogPayload) error
 }
 
+type ReportCreator interface {
+	CreateReport(context.Context, reporting.CreateReportRequest) (*reporting.CreatedReport, error)
+}
+
 type Option func(*Engine)
 
 func WithReportSink(sink ReportSink) Option {
@@ -78,12 +84,21 @@ func WithReportSink(sink ReportSink) Option {
 	}
 }
 
+func WithReportCreator(creator ReportCreator) Option {
+	return func(e *Engine) {
+		if creator != nil {
+			e.reportCreator = creator
+		}
+	}
+}
+
 func New(client Sender, refData reference.Provider, options ...Option) *Engine {
 	engine := &Engine{
-		client:     client,
-		refData:    refData,
-		reportSink: noopReportSink{},
-		sessions:   make(map[int64]*Session),
+		client:        client,
+		refData:       refData,
+		reportSink:    noopReportSink{},
+		reportCreator: noopReportCreator{},
+		sessions:      make(map[int64]*Session),
 	}
 	for _, option := range options {
 		option(engine)
@@ -94,6 +109,17 @@ func New(client Sender, refData reference.Provider, options ...Option) *Engine {
 type noopReportSink struct{}
 
 func (noopReportSink) Store(context.Context, report.DialogPayload) error { return nil }
+
+type noopReportCreator struct{}
+
+func (noopReportCreator) CreateReport(context.Context, reporting.CreateReportRequest) (*reporting.CreatedReport, error) {
+	return &reporting.CreatedReport{
+		ID:           0,
+		ReportNumber: "DEV",
+		Status:       "moderation",
+		Stage:        "sended",
+	}, nil
+}
 
 func (e *Engine) HandleUpdate(ctx context.Context, upd maxapi.Update) error {
 	switch upd.UpdateType {
@@ -298,16 +324,21 @@ func (e *Engine) finishDraft(ctx context.Context, userID int64) error {
 	session := e.session(userID)
 
 	completedAt := time.Now().UTC()
-	reportNumber := fmt.Sprintf("DEV-%d", completedAt.UnixNano())
-	payload := e.buildDialogPayload(userID, reportNumber, completedAt, session)
+	payload := e.buildDialogPayload(userID, fmt.Sprintf("RAW-%d", completedAt.UnixNano()), completedAt, session)
 	if err := e.reportSink.Store(ctx, payload); err != nil {
-		slog.Error("не удалось сохранить диалог в outbox", "user_id", userID, "report_number", reportNumber, "error", err.Error())
+		slog.Error("не удалось сохранить диалог в outbox", "user_id", userID, "dedup_key", payload.DedupKey, "error", err.Error())
 		return e.sendText(ctx, userID, "Не удалось сохранить сообщение. Попробуйте отправить ещё раз немного позже.", confirmKeyboard())
 	}
 
-	slog.Info("черновик принят", "user_id", userID, "report_number", reportNumber, "dedup_key", payload.DedupKey)
+	created, err := e.reportCreator.CreateReport(ctx, e.buildCreateReportRequest(userID, payload.DedupKey, session))
+	if err != nil {
+		slog.Error("не удалось создать обращение в основной БД", "user_id", userID, "dedup_key", payload.DedupKey, "error", err.Error())
+		return e.sendText(ctx, userID, "Не удалось создать обращение. Черновик сохранён, попробуйте ещё раз немного позже.", confirmKeyboard())
+	}
+
+	slog.Info("черновик принят", "user_id", userID, "report_number", created.ReportNumber, "dedup_key", payload.DedupKey)
 	e.resetSession(userID)
-	return e.sendText(ctx, userID, "Сообщение принято в dev-режиме с номером "+reportNumber+".\n\nДиалог упакован в JSON и поставлен в очередь отправки в PostgreSQL.", backToMenuKeyboard())
+	return e.sendText(ctx, userID, "Сообщение принято с номером "+created.ReportNumber+".\n\nТекущий статус: "+created.Status+".", backToMenuKeyboard())
 }
 
 func (e *Engine) sendDraftSummary(ctx context.Context, userID int64) error {
@@ -434,6 +465,21 @@ func (e *Engine) buildDialogPayload(userID int64, reportNumber string, completed
 	}
 	payload.Normalize(completedAt)
 	return payload
+}
+
+func (e *Engine) buildCreateReportRequest(userID int64, dialogDedupKey string, session *Session) reporting.CreateReportRequest {
+	return reporting.CreateReportRequest{
+		DialogDedupKey: dialogDedupKey,
+		MaxUserID:      userID,
+		CategoryID:     session.Draft.CategoryID,
+		MunicipalityID: session.Draft.MunicipalityID,
+		Phone:          session.Draft.Phone,
+		Address:        session.Draft.Address,
+		IncidentTime:   session.Draft.IncidentTime,
+		Description:    session.Draft.Description,
+		AdditionalInfo: session.Draft.ExtraInfo,
+		AttachmentLog:  append([]string(nil), session.Draft.AttachmentLog...),
+	}
 }
 
 func parseChoice(text string, max int) (int, bool) {

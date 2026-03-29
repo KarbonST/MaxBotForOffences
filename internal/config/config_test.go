@@ -33,11 +33,17 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.APIMaxRetries != 3 {
 		t.Fatalf("unexpected retry default: %d", cfg.APIMaxRetries)
 	}
-	if cfg.ReferenceAPIBaseURL != "http://127.0.0.1:8090" {
+	if cfg.ReferenceAPIBaseURL != "http://127.0.0.1:8091" {
 		t.Fatalf("unexpected reference api base: %q", cfg.ReferenceAPIBaseURL)
 	}
 	if cfg.ReferenceAPITimeout != 5*time.Second {
 		t.Fatalf("unexpected reference api timeout: %v", cfg.ReferenceAPITimeout)
+	}
+	if cfg.CoreAPIBaseURL != "http://127.0.0.1:8091" {
+		t.Fatalf("unexpected core api base: %q", cfg.CoreAPIBaseURL)
+	}
+	if cfg.CoreAPITimeout != 5*time.Second {
+		t.Fatalf("unexpected core api timeout: %v", cfg.CoreAPITimeout)
 	}
 	if !cfg.ReportPipelineEnabled {
 		t.Fatalf("expected report pipeline enabled by default")
@@ -65,6 +71,7 @@ func TestLoadNormalizesInvalidValues(t *testing.T) {
 	t.Setenv("MAX_DEDUP_TTL", "0")
 	t.Setenv("REFERENCE_API_TIMEOUT", "0")
 	t.Setenv("REFERENCE_CACHE_TTL", "0")
+	t.Setenv("CORE_API_TIMEOUT", "0")
 	t.Setenv("REPORT_OUTBOX_QUEUE_SIZE", "0")
 	t.Setenv("REPORT_OUTBOX_RETRY_BASE", "0")
 	t.Setenv("REPORT_OUTBOX_RETRY_MAX", "1ms")
@@ -108,6 +115,9 @@ func TestLoadNormalizesInvalidValues(t *testing.T) {
 	if cfg.ReferenceCacheTTL <= 0 {
 		t.Fatalf("expected positive reference cache ttl, got %v", cfg.ReferenceCacheTTL)
 	}
+	if cfg.CoreAPITimeout <= 0 {
+		t.Fatalf("expected positive core api timeout, got %v", cfg.CoreAPITimeout)
+	}
 	if cfg.ReportOutboxQueueSize != 256 {
 		t.Fatalf("expected report outbox queue fallback, got %d", cfg.ReportOutboxQueueSize)
 	}
@@ -130,6 +140,7 @@ func TestLoadDurationParsing(t *testing.T) {
 	t.Setenv("MAX_DEDUP_TTL", "7s")
 	t.Setenv("REFERENCE_API_TIMEOUT", "6s")
 	t.Setenv("REFERENCE_CACHE_TTL", "8s")
+	t.Setenv("CORE_API_TIMEOUT", "11s")
 	t.Setenv("REPORT_OUTBOX_RETRY_BASE", "2s")
 	t.Setenv("REPORT_OUTBOX_RETRY_MAX", "9")
 
@@ -155,6 +166,9 @@ func TestLoadDurationParsing(t *testing.T) {
 	}
 	if cfg.ReferenceCacheTTL != 8*time.Second {
 		t.Fatalf("expected reference cache ttl 8s, got %v", cfg.ReferenceCacheTTL)
+	}
+	if cfg.CoreAPITimeout != 11*time.Second {
+		t.Fatalf("expected core api timeout 11s, got %v", cfg.CoreAPITimeout)
 	}
 	if cfg.ReportOutboxRetryBase != 2*time.Second {
 		t.Fatalf("expected report outbox retry base 2s, got %v", cfg.ReportOutboxRetryBase)

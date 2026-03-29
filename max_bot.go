@@ -16,6 +16,7 @@ import (
 	"max_bot/internal/maxapi"
 	"max_bot/internal/reference"
 	"max_bot/internal/report"
+	"max_bot/internal/reporting"
 	botruntime "max_bot/internal/runtime"
 	"max_bot/internal/scenario"
 )
@@ -51,10 +52,15 @@ func main() {
 		HTTPClient: &http.Client{Timeout: cfg.ReferenceAPITimeout},
 	})
 	referenceProvider := reference.NewCachedProvider(referenceClient, cfg.ReferenceCacheTTL)
+	reportClient := reporting.NewClient(cfg.CoreAPIBaseURL, reporting.ClientOptions{
+		HTTPClient: &http.Client{Timeout: cfg.CoreAPITimeout},
+	})
 
-	engineOptions := make([]scenario.Option, 0, 1)
+	engineOptions := make([]scenario.Option, 0, 2)
 	closers := make([]io.Closer, 0, 1)
 	defer closeAll(closers, logger)
+
+	engineOptions = append(engineOptions, scenario.WithReportCreator(reportClient))
 
 	if cfg.ReportPipelineEnabled {
 		if cfg.ReportDatabaseURL == "" {
@@ -90,6 +96,12 @@ func main() {
 			)
 		}
 	}
+
+	logger.Info(
+		"подключены backend api",
+		"reference_api_base", cfg.ReferenceAPIBaseURL,
+		"core_api_base", cfg.CoreAPIBaseURL,
+	)
 
 	engine := scenario.New(client, referenceProvider, engineOptions...)
 	deduper := botruntime.NewDeduper(cfg.DedupTTL)
