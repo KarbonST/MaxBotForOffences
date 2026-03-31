@@ -10,6 +10,8 @@ import (
 	"max_bot/internal/reporting"
 )
 
+var userFacingLocation = loadUserFacingLocation()
+
 func mainMenuMessage() (string, []maxapi.AttachmentRequest) {
 	text := strings.Join([]string{
 		"Главное меню.",
@@ -199,12 +201,20 @@ func humanizeReportStatus(status string) string {
 
 func formatReportMoment(createdAt time.Time, sendedAt *time.Time) string {
 	if sendedAt != nil && !sendedAt.IsZero() {
-		return sendedAt.Format("02.01.2006 15:04")
+		return sendedAt.In(userFacingLocation).Format("02.01.2006 15:04")
 	}
 	if createdAt.IsZero() {
 		return "-"
 	}
-	return createdAt.Format("02.01.2006 15:04")
+	return createdAt.In(userFacingLocation).Format("02.01.2006 15:04")
+}
+
+func loadUserFacingLocation() *time.Location {
+	loc, err := time.LoadLocation("Europe/Moscow")
+	if err != nil {
+		return time.FixedZone("Europe/Moscow", 3*60*60)
+	}
+	return loc
 }
 
 func inlineKeyboard(rows ...[]maxapi.Button) maxapi.AttachmentRequest {

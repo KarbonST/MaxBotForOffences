@@ -192,6 +192,7 @@ curl -X POST http://127.0.0.1:8091/api/reports \
 
 Бот:
 
+- `TZ` - пользовательская таймзона контейнера, по умолчанию `Europe/Moscow`
 - `MAX_BOT_TOKEN` - обязателен
 - `MAX_RUN_MODE` - `polling` или `webhook`
 - `MAX_API_BASE` - base URL MAX API
@@ -209,6 +210,7 @@ curl -X POST http://127.0.0.1:8091/api/reports \
 
 Backend:
 
+- `TZ` - таймзона контейнера `core_api`, по умолчанию `Europe/Moscow`
 - `DATABASE_URL` - обязателен для `core_api`
 - `CORE_API_ADDR`
 - `CORE_API_READ_TIMEOUT`

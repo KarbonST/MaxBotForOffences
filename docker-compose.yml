@@ -29,6 +29,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
+      TZ: ${TZ:-Europe/Moscow}
       DATABASE_URL: postgres://${POSTGRES_USER:-maxbot}:${POSTGRES_PASSWORD:-maxbot}@postgres:5432/${POSTGRES_DB:-maxbot}?sslmode=disable
       CORE_API_ADDR: :8091
       CORE_API_READ_TIMEOUT: ${CORE_API_READ_TIMEOUT:-5s}
@@ -52,6 +53,7 @@ services:
       core-api:
         condition: service_healthy
     environment:
+      TZ: ${TZ:-Europe/Moscow}
       MAX_BOT_TOKEN: ${MAX_BOT_TOKEN:-}
       MAX_API_BASE: ${MAX_API_BASE:-https://platform-api.max.ru}
       MAX_RUN_MODE: ${MAX_RUN_MODE:-polling}
