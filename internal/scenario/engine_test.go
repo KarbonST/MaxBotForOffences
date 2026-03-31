@@ -107,9 +107,9 @@ func TestFlowHappyPathToConfirm(t *testing.T) {
 		callbackUpdate(userID, "cb1", "report:consent_yes"),
 		textUpdate(userID, "1"),
 		textUpdate(userID, "2"),
-		textUpdate(userID, "9991234567"),
+		textUpdate(userID, "+79991234567"),
 		textUpdate(userID, "ул. Мира, дом 1"),
-		textUpdate(userID, "ночь"),
+		textUpdate(userID, "31/03/26 14:45"),
 		textUpdate(userID, "Описание нарушения"),
 		callbackUpdate(userID, "cb2", "report:skip_media"),
 		callbackUpdate(userID, "cb3", "report:skip_extra"),
@@ -185,9 +185,9 @@ func TestFlowSendDraftStoresDialogPayload(t *testing.T) {
 		callbackUpdate(userID, "cb1", "report:consent_yes"),
 		textUpdate(userID, "1"),
 		textUpdate(userID, "2"),
-		textUpdate(userID, "9991234567"),
+		textUpdate(userID, "+79991234567"),
 		textUpdate(userID, "ул. Мира, дом 1"),
-		textUpdate(userID, "ночь"),
+		textUpdate(userID, "31/03/26 14:45"),
 		textUpdate(userID, "Описание нарушения"),
 		callbackUpdate(userID, "cb2", "report:skip_media"),
 		callbackUpdate(userID, "cb3", "report:skip_extra"),
@@ -211,6 +211,35 @@ func TestFlowSendDraftStoresDialogPayload(t *testing.T) {
 	}
 	if !strings.Contains(mock.lastText(), "Сообщение принято с номером 15") {
 		t.Fatalf("expected final report confirmation text, got %q", mock.lastText())
+	}
+}
+
+func TestFlowValidationIncidentTimeError(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{})
+	userID := int64(105)
+
+	steps := []maxapi.Update{
+		callbackUpdate(userID, "cb1", "report:consent_yes"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "89991234567"),
+		textUpdate(userID, "ул. Мира, дом 1"),
+		textUpdate(userID, "завтра вечером"),
+	}
+
+	for _, step := range steps {
+		if err := engine.HandleUpdate(context.Background(), step); err != nil {
+			t.Fatalf("HandleUpdate() error = %v", err)
+		}
+	}
+
+	session := engine.session(userID)
+	if session.State != stateReportTime {
+		t.Fatalf("expected state %q, got %q", stateReportTime, session.State)
+	}
+	if !strings.Contains(mock.lastText(), "формате дд/мм/гг чч:мм") {
+		t.Fatalf("expected incident time validation text, got %q", mock.lastText())
 	}
 }
 

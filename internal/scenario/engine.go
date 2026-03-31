@@ -30,7 +30,7 @@ const (
 	stateReportConfirm   = "report_confirm"
 )
 
-var phoneRe = regexp.MustCompile(`^\d{10}$`)
+var phoneRe = regexp.MustCompile(`^[78]\d{10}$`)
 
 type Engine struct {
 	client        Sender
@@ -258,11 +258,11 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		session.Draft.MunicipalityID = selected.ID
 		session.Draft.MunicipalityName = selected.Name
 		session.State = stateReportPhone
-		return e.sendText(ctx, userID, "Введите номер телефона в формате 10 цифр без +7/8 или отправьте контакт кнопкой ниже.", phoneKeyboard())
+		return e.sendText(ctx, userID, "Введите номер телефона начиная с 8/+7 или отправьте контакт по кнопке ниже.", phoneKeyboard())
 	case stateReportPhone:
 		phone := parsePhone(text, attachments)
 		if !phoneRe.MatchString(phone) {
-			return e.sendText(ctx, userID, "Номер не соответствует формату. Нужны ровно 10 цифр.", phoneKeyboard())
+			return e.sendText(ctx, userID, "Номер не соответствует формату. Введите 11 цифр, начиная с 8 или +7.", phoneKeyboard())
 		}
 		session.Draft.Phone = phone
 		session.State = stateReportAddress
@@ -273,12 +273,13 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		}
 		session.Draft.Address = text
 		session.State = stateReportTime
-		return e.sendText(ctx, userID, "Введите время или период совершения правонарушения.", backToMenuKeyboard())
+		return e.sendText(ctx, userID, "Введите дату и время нарушения по формату день/месяц/год часы:минуты.", backToMenuKeyboard())
 	case stateReportTime:
-		if len(text) == 0 || len([]rune(text)) > 100 {
-			return e.sendText(ctx, userID, "Время/период должен быть от 1 до 100 символов.", backToMenuKeyboard())
+		incidentTime, ok := parseIncidentTime(text)
+		if !ok {
+			return e.sendText(ctx, userID, "Дата и время должны быть в формате дд/мм/гг чч:мм. Пример: 31/03/26 14:45.", backToMenuKeyboard())
 		}
-		session.Draft.IncidentTime = text
+		session.Draft.IncidentTime = incidentTime
 		session.State = stateReportDesc
 		return e.sendText(ctx, userID, "Опишите суть правонарушения. Максимум 3900 символов.", backToMenuKeyboard())
 	case stateReportDesc:
@@ -491,7 +492,7 @@ func parseChoice(text string, max int) (int, bool) {
 }
 
 func parsePhone(text string, attachments []maxapi.AttachmentBody) string {
-	if phone := digitsOnly(text); phoneRe.MatchString(phone) {
+	if phone := normalizePhone(text); phone != "" {
 		return phone
 	}
 
@@ -504,12 +505,34 @@ func parsePhone(text string, attachments []maxapi.AttachmentBody) string {
 		if err := json.Unmarshal(item.RawPayload, &payload); err != nil {
 			continue
 		}
-		if phone := digitsOnly(payload.VCFPhone); len(phone) >= 10 {
-			return phone[len(phone)-10:]
+		if phone := normalizePhone(payload.VCFPhone); phone != "" {
+			return phone
 		}
 	}
 
 	return ""
+}
+
+func normalizePhone(value string) string {
+	phone := digitsOnly(value)
+	if !phoneRe.MatchString(phone) {
+		return ""
+	}
+	return phone
+}
+
+func parseIncidentTime(value string) (string, bool) {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		return "", false
+	}
+
+	const layout = "02/01/06 15:04"
+	parsed, err := time.Parse(layout, raw)
+	if err != nil {
+		return "", false
+	}
+	return parsed.Format(layout), true
 }
 
 func digitsOnly(value string) string {
