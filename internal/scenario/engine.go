@@ -278,7 +278,7 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 			slog.Error("не удалось загрузить карточку обращения", "user_id", userID, "report_id", selected.ID, "error", err.Error())
 			return e.sendText(ctx, userID, "Не удалось загрузить подробную информацию по обращению. Попробуйте ещё раз.", myReportsKeyboard())
 		}
-		return e.sendText(ctx, userID, myReportDetailMessage(index, detail), myReportsKeyboard())
+		return e.sendText(ctx, userID, myReportDetailMessage(detail), myReportsKeyboard())
 	case stateReportCategory:
 		categories, err := e.loadCategories(ctx)
 		if err != nil {

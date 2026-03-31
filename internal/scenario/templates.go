@@ -140,25 +140,16 @@ func myReportsListMessage(items []reporting.ReportSummary) string {
 		"Ваши обращения:",
 	}
 	for i, item := range items {
-		lines = append(lines, fmt.Sprintf("%d. №%s | %s", i+1, item.ReportNumber, humanizeReportStatus(item.Status)))
-		lines = append(lines, fmt.Sprintf("   %s", formatReportMoment(item.CreatedAt, item.SendedAt)))
-		if value := strings.TrimSpace(item.CategoryName); value != "" {
-			lines = append(lines, fmt.Sprintf("   Категория: %s", value))
-		}
-		if value := strings.TrimSpace(item.Address); value != "" {
-			lines = append(lines, fmt.Sprintf("   Адрес: %s", value))
-		}
-		if value := truncateRunes(strings.TrimSpace(item.Description), 90); value != "" {
-			lines = append(lines, fmt.Sprintf("   Суть: %s", value))
-		}
+		lines = append(lines, fmt.Sprintf("%d. %s", i+1, formatReportMoment(item.CreatedAt, item.SendedAt)))
+		lines = append(lines, fmt.Sprintf("   Статус: %s", humanizeReportStatus(item.Status)))
 	}
 	lines = append(lines, "", "Отправьте номер обращения из списка, чтобы посмотреть подробности.")
 	return strings.Join(lines, "\n")
 }
 
-func myReportDetailMessage(index int, item *reporting.ReportDetail) string {
+func myReportDetailMessage(item *reporting.ReportDetail) string {
 	lines := []string{
-		fmt.Sprintf("Обращение %d: №%s", index, item.ReportNumber),
+		fmt.Sprintf("Обращение №%s", item.ReportNumber),
 		fmt.Sprintf("Статус: %s", humanizeReportStatus(item.Status)),
 		fmt.Sprintf("Дата: %s", formatReportMoment(item.CreatedAt, item.SendedAt)),
 	}
@@ -183,7 +174,7 @@ func myReportDetailMessage(index int, item *reporting.ReportDetail) string {
 	if value := strings.TrimSpace(item.Answer); value != "" {
 		lines = append(lines, fmt.Sprintf("Ответ: %s", value))
 	}
-	lines = append(lines, "", "Можно отправить номер другого обращения или нажать кнопку ниже.")
+	lines = append(lines, "", "Чтобы открыть другое обращение, отправьте его номер из списка.")
 	return strings.Join(lines, "\n")
 }
 
@@ -214,17 +205,6 @@ func formatReportMoment(createdAt time.Time, sendedAt *time.Time) string {
 		return "-"
 	}
 	return createdAt.Format("02.01.2006 15:04")
-}
-
-func truncateRunes(value string, limit int) string {
-	if limit <= 0 {
-		return ""
-	}
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
-	}
-	return strings.TrimSpace(string(runes[:limit])) + "..."
 }
 
 func inlineKeyboard(rows ...[]maxapi.Button) maxapi.AttachmentRequest {

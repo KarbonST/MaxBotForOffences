@@ -396,19 +396,25 @@ func TestFlowMyReportsShowsListAndDetails(t *testing.T) {
 	if !strings.Contains(mock.lastText(), "Ваши обращения:") {
 		t.Fatalf("expected reports list text, got %q", mock.lastText())
 	}
-	if !strings.Contains(mock.lastText(), "2. №16 | В работе") {
+	if !strings.Contains(mock.lastText(), "2. 31.03.2026 13:00") {
 		t.Fatalf("expected second report summary in list, got %q", mock.lastText())
+	}
+	if !strings.Contains(mock.lastText(), "Статус: В работе") {
+		t.Fatalf("expected status line in list, got %q", mock.lastText())
 	}
 
 	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "2")); err != nil {
 		t.Fatalf("HandleUpdate() error = %v", err)
 	}
 
-	if !strings.Contains(mock.lastText(), "Обращение 2: №16") {
+	if !strings.Contains(mock.lastText(), "Обращение №16") {
 		t.Fatalf("expected selected report detail, got %q", mock.lastText())
 	}
 	if !strings.Contains(mock.lastText(), "Доп. информация: Во дворе кафе") {
 		t.Fatalf("expected additional info in detail, got %q", mock.lastText())
+	}
+	if !strings.Contains(mock.lastText(), "Чтобы открыть другое обращение, отправьте его номер из списка.") {
+		t.Fatalf("expected simplified detail hint, got %q", mock.lastText())
 	}
 
 	session := engine.session(userID)
