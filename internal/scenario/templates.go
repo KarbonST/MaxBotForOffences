@@ -22,19 +22,15 @@ func mainMenuMessage() (string, []maxapi.AttachmentRequest) {
 		"4. Посмотреть, как работают кнопки и сценарии.",
 	}, "\n")
 
-	return text, []maxapi.AttachmentRequest{
-		inlineKeyboard(
-			row(cb("О боте", "menu:about")),
-			row(cb("Юридическая информация", "menu:legal")),
-			row(cb("Список нарушений", "menu:violations")),
-			row(cb("Сообщить о нарушении", "menu:report")),
-			row(cb("Мои сообщения", "menu:my_reports")),
-		),
-	}
+	return text, mainMenuKeyboard()
+}
+
+func welcomeMessage() (string, []maxapi.AttachmentRequest) {
+	return "Данный бот создан для оперативного сбора информации об административных правонарушениях, предусмотренных региональным законодательством (в сфере благоустройства территорий муниципальных образований, обращения с домашними животными, выпаса и прогона сельскохозяйственных животных, торговли вне установленных мест, тишины и покоя граждан и др.).", mainMenuKeyboard()
 }
 
 func aboutMessage() (string, []maxapi.AttachmentRequest) {
-	return "Этот бот нужен для оперативного сбора сообщений об административных правонарушениях. Сейчас запущен dev-каркас: он показывает кнопки, пишет входящие события в терминал и ведёт по базовому сценарию.", backToMenuKeyboard()
+	return "Данный бот создан для оперативного сбора информации об административных правонарушениях, предусмотренных региональным законодательством (в сфере благоустройства территорий муниципальных образований, обращения с домашними животными, выпаса и прогона сельскохозяйственных животных, торговли вне установленных мест, тишины и покоя граждан и др.).", mainMenuKeyboard()
 }
 
 func legalMessage() (string, []maxapi.AttachmentRequest) {
@@ -125,6 +121,18 @@ func confirmKeyboard() []maxapi.AttachmentRequest {
 func backToMenuKeyboard() []maxapi.AttachmentRequest {
 	return []maxapi.AttachmentRequest{
 		inlineKeyboard(row(cb("Вернуться в меню", "menu:main"))),
+	}
+}
+
+func mainMenuKeyboard() []maxapi.AttachmentRequest {
+	return []maxapi.AttachmentRequest{
+		inlineKeyboard(
+			row(cb("О боте", "menu:about")),
+			row(cb("Юридическая информация", "menu:legal")),
+			row(cb("Список нарушений", "menu:violations")),
+			row(cb("Сообщить о нарушении", "menu:report")),
+			row(cb("Мои сообщения", "menu:my_reports")),
+		),
 	}
 }
 

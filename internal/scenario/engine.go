@@ -155,7 +155,7 @@ func (e *Engine) HandleUpdate(ctx context.Context, upd maxapi.Update) error {
 			return nil
 		}
 		slog.Info("бот запущен пользователем", "user_id", upd.User.UserID, "payload", upd.Payload)
-		return e.showMainMenu(ctx, upd.User.UserID)
+		return e.showWelcome(ctx, upd.User.UserID)
 	case "message_callback":
 		return e.handleCallback(ctx, upd)
 	case "message_created":
@@ -190,8 +190,7 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 	case "menu:main":
 		return e.showMainMenu(ctx, userID)
 	case "menu:about":
-		text, attachments := aboutMessage()
-		return e.reply(ctx, userID, text, attachments)
+		return e.showAbout(ctx, userID)
 	case "menu:legal":
 		text, attachments := legalMessage()
 		return e.reply(ctx, userID, text, attachments)
@@ -259,7 +258,10 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		AttachmentTypes: attachmentTypes(attachments),
 	})
 
-	if text == "/start" || strings.EqualFold(text, "меню") {
+	if text == "/start" {
+		return e.showWelcome(ctx, userID)
+	}
+	if strings.EqualFold(text, "меню") {
 		return e.showMainMenu(ctx, userID)
 	}
 
@@ -370,6 +372,18 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 func (e *Engine) showMainMenu(ctx context.Context, userID int64) error {
 	e.resetSession(userID)
 	text, attachments := mainMenuMessage()
+	return e.reply(ctx, userID, text, attachments)
+}
+
+func (e *Engine) showWelcome(ctx context.Context, userID int64) error {
+	e.resetSession(userID)
+	text, attachments := welcomeMessage()
+	return e.reply(ctx, userID, text, attachments)
+}
+
+func (e *Engine) showAbout(ctx context.Context, userID int64) error {
+	e.resetSession(userID)
+	text, attachments := aboutMessage()
 	return e.reply(ctx, userID, text, attachments)
 }
 

@@ -219,6 +219,67 @@ func TestFlowFallbackToMenuForUnknownState(t *testing.T) {
 	}
 }
 
+func TestBotStartedShowsWelcomeMessage(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{})
+	userID := int64(1031)
+
+	err := engine.HandleUpdate(context.Background(), maxapi.Update{
+		UpdateType: "bot_started",
+		User: &maxapi.User{
+			UserID: userID,
+		},
+	})
+	if err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	if !strings.Contains(mock.lastText(), "Данный бот создан для оперативного сбора информации") {
+		t.Fatalf("expected welcome text, got %q", mock.lastText())
+	}
+	if strings.Contains(mock.lastText(), "Главное меню") {
+		t.Fatalf("did not expect plain main menu text on bot_started, got %q", mock.lastText())
+	}
+}
+
+func TestStartCommandShowsWelcomeMessage(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{})
+	userID := int64(1032)
+
+	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "/start")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	if !strings.Contains(mock.lastText(), "Данный бот создан для оперативного сбора информации") {
+		t.Fatalf("expected welcome text on /start, got %q", mock.lastText())
+	}
+	if strings.Contains(mock.lastText(), "Главное меню") {
+		t.Fatalf("did not expect plain main menu text on /start, got %q", mock.lastText())
+	}
+}
+
+func TestAboutReturnsUserToMainMenuState(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{})
+	userID := int64(1033)
+
+	engine.setState(userID, stateReportAddress)
+
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb-about", "menu:about")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	if !strings.Contains(mock.lastText(), "Данный бот создан для оперативного сбора информации") {
+		t.Fatalf("expected about text, got %q", mock.lastText())
+	}
+
+	session := engine.session(userID)
+	if session.State != stateMainMenu {
+		t.Fatalf("expected state %q after about, got %q", stateMainMenu, session.State)
+	}
+}
+
 func TestFlowSendDraftStoresDialogPayload(t *testing.T) {
 	mock := &senderMock{}
 	reportMock := &reportSinkMock{}
