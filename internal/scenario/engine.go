@@ -258,11 +258,11 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		session.Draft.MunicipalityID = selected.ID
 		session.Draft.MunicipalityName = selected.Name
 		session.State = stateReportPhone
-		return e.sendText(ctx, userID, "Введите номер телефона начиная с 8/+7 или отправьте контакт по кнопке ниже.", phoneKeyboard())
+		return e.sendText(ctx, userID, "Введите номер телефона начиная с 8/7 или отправьте контакт по кнопке ниже.", phoneKeyboard())
 	case stateReportPhone:
 		phone := parsePhone(text, attachments)
 		if !phoneRe.MatchString(phone) {
-			return e.sendText(ctx, userID, "Номер не соответствует формату. Введите 11 цифр, начиная с 8 или +7.", phoneKeyboard())
+			return e.sendText(ctx, userID, "Номер не соответствует формату. Введите 11 цифр, начиная с 8 или 7.", phoneKeyboard())
 		}
 		session.Draft.Phone = phone
 		session.State = stateReportAddress
