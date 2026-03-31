@@ -24,7 +24,8 @@ Go-проект для MAX-бота и backend API под ТЗ по обраще
   1. сохраняет raw-слепок диалога в `dialog_reports`;
   2. создаёт реальное обращение в таблице `messages`;
   3. создаёт/обновляет пользователя в `users`;
-  4. пишет стартовое событие в `messages_history`.
+  4. пишет стартовое событие в `messages_history`;
+  5. дожимает raw-слепок, чтобы в `dialog_reports` появились `message_id` и `normalized_at`.
 - Backend уже отдаёт API, на которое можно опирать frontend и бота:
   - `GET /api/reference/categories`
   - `GET /api/reference/municipalities`
@@ -161,7 +162,7 @@ curl -X POST http://127.0.0.1:8091/api/reports \
 - ищет/создаёт пользователя по `users.max_id`;
 - создаёт запись в `messages` со статусом `moderation` и этапом `sended`;
 - пишет событие в `messages_history`;
-- если передан `dialog_dedup_key`, связывает raw-запись из `dialog_reports` с созданным `messages.id`.
+- если передан `dialog_dedup_key`, пытается сразу связать raw-запись из `dialog_reports` с созданным `messages.id`, а raw outbox потом безопасно дожимает эту связь повторным upsert.
 
 ## Raw snapshot: dialog_reports
 

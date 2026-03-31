@@ -63,10 +63,22 @@ func (s *PostgresSink) Store(ctx context.Context, payload DialogPayload) error {
 			source,
 			created_at,
 			completed_at,
+			message_id,
+			normalized_at,
 			payload
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
-		ON CONFLICT (dedup_key) DO NOTHING
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+		ON CONFLICT (dedup_key) DO UPDATE SET
+			report_number = CASE
+				WHEN EXCLUDED.message_id IS NOT NULL THEN EXCLUDED.report_number
+				ELSE dialog_reports.report_number
+			END,
+			message_id = COALESCE(dialog_reports.message_id, EXCLUDED.message_id),
+			normalized_at = COALESCE(dialog_reports.normalized_at, EXCLUDED.normalized_at),
+			payload = CASE
+				WHEN EXCLUDED.message_id IS NOT NULL THEN EXCLUDED.payload
+				ELSE dialog_reports.payload
+			END
 	`,
 		payload.DedupKey,
 		payload.DialogID,
@@ -76,6 +88,8 @@ func (s *PostgresSink) Store(ctx context.Context, payload DialogPayload) error {
 		payload.Source,
 		payload.CreatedAt,
 		payload.CompletedAt,
+		payload.MessageID,
+		payload.NormalizedAt,
 		string(raw),
 	)
 	if err != nil {
