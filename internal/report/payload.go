@@ -17,6 +17,8 @@ type DialogPayload struct {
 	ReportNumber  string       `json:"report_number"`
 	CreatedAt     time.Time    `json:"created_at"`
 	CompletedAt   time.Time    `json:"completed_at"`
+	MessageID     *int64       `json:"message_id,omitempty"`
+	NormalizedAt  *time.Time   `json:"normalized_at,omitempty"`
 	Draft         DialogDraft  `json:"draft"`
 	Steps         []DialogStep `json:"steps,omitempty"`
 }
@@ -65,5 +67,13 @@ func (p *DialogPayload) Normalize(now time.Time) {
 	}
 	if p.DedupKey == "" {
 		p.DedupKey = strings.TrimSpace(fmt.Sprintf("%d:%s", p.UserID, p.ReportNumber))
+	}
+	if p.NormalizedAt != nil {
+		if p.NormalizedAt.IsZero() {
+			p.NormalizedAt = nil
+		} else {
+			value := p.NormalizedAt.UTC()
+			p.NormalizedAt = &value
+		}
 	}
 }

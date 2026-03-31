@@ -337,6 +337,14 @@ func (e *Engine) finishDraft(ctx context.Context, userID int64) error {
 		return e.sendText(ctx, userID, "Не удалось создать обращение. Черновик сохранён, попробуйте ещё раз немного позже.", confirmKeyboard())
 	}
 
+	payload.ReportNumber = created.ReportNumber
+	payload.MessageID = &created.ID
+	normalizedAt := time.Now().UTC()
+	payload.NormalizedAt = &normalizedAt
+	if err := e.reportSink.Store(ctx, payload); err != nil {
+		slog.Warn("не удалось обновить raw-слепок диалога ссылкой на сообщение", "user_id", userID, "report_number", created.ReportNumber, "dedup_key", payload.DedupKey, "error", err.Error())
+	}
+
 	slog.Info("черновик принят", "user_id", userID, "report_number", created.ReportNumber, "dedup_key", payload.DedupKey)
 	e.resetSession(userID)
 	return e.sendText(ctx, userID, "Сообщение принято с номером "+created.ReportNumber+".\n\nТекущий статус: "+created.Status+".", backToMenuKeyboard())

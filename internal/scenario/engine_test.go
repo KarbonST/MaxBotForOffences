@@ -3,6 +3,7 @@ package scenario
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -23,6 +24,7 @@ type senderMock struct {
 type reportSinkMock struct {
 	mu       sync.Mutex
 	payloads []report.DialogPayload
+	errs     []error
 }
 
 type reportCreatorMock struct {
@@ -73,6 +75,13 @@ func (m *senderMock) lastText() string {
 func (m *reportSinkMock) Store(_ context.Context, payload report.DialogPayload) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if len(m.errs) > 0 {
+		err := m.errs[0]
+		m.errs = m.errs[1:]
+		if err != nil {
+			return err
+		}
+	}
 	m.payloads = append(m.payloads, payload)
 	return nil
 }
@@ -81,6 +90,15 @@ func (m *reportSinkMock) count() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.payloads)
+}
+
+func (m *reportSinkMock) snapshot() []report.DialogPayload {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	result := make([]report.DialogPayload, len(m.payloads))
+	copy(result, m.payloads)
+	return result
 }
 
 func (m *reportCreatorMock) CreateReport(_ context.Context, req reporting.CreateReportRequest) (*reporting.CreatedReport, error) {
@@ -201,8 +219,8 @@ func TestFlowSendDraftStoresDialogPayload(t *testing.T) {
 		}
 	}
 
-	if reportMock.count() != 1 {
-		t.Fatalf("expected 1 stored payload, got %d", reportMock.count())
+	if reportMock.count() != 2 {
+		t.Fatalf("expected 2 stored payloads, got %d", reportMock.count())
 	}
 	if len(creatorMock.requests) != 1 {
 		t.Fatalf("expected 1 create report request, got %d", len(creatorMock.requests))
@@ -210,8 +228,61 @@ func TestFlowSendDraftStoresDialogPayload(t *testing.T) {
 	if creatorMock.requests[0].DialogDedupKey == "" {
 		t.Fatalf("expected dialog dedup key to be passed to creator")
 	}
+	payloads := reportMock.snapshot()
+	if payloads[0].DedupKey != creatorMock.requests[0].DialogDedupKey {
+		t.Fatalf("expected dedup key %q, got %q", creatorMock.requests[0].DialogDedupKey, payloads[0].DedupKey)
+	}
+	if payloads[0].MessageID != nil {
+		t.Fatalf("expected initial raw payload without message link, got %+v", payloads[0].MessageID)
+	}
+	if payloads[1].MessageID == nil || *payloads[1].MessageID != 15 {
+		t.Fatalf("expected linked raw payload with message_id=15, got %+v", payloads[1].MessageID)
+	}
+	if payloads[1].NormalizedAt == nil {
+		t.Fatalf("expected linked raw payload with normalized_at timestamp")
+	}
+	if payloads[1].ReportNumber != "15" {
+		t.Fatalf("expected linked raw payload to store real report number, got %q", payloads[1].ReportNumber)
+	}
 	if !strings.Contains(mock.lastText(), "Сообщение принято с номером 15") {
 		t.Fatalf("expected final report confirmation text, got %q", mock.lastText())
+	}
+}
+
+func TestFlowSendDraftKeepsSuccessWhenRawBackfillFails(t *testing.T) {
+	mock := &senderMock{}
+	reportMock := &reportSinkMock{errs: []error{nil, errors.New("temporary outbox error")}}
+	creatorMock := &reportCreatorMock{}
+	engine := New(mock, referenceProviderMock{}, WithReportSink(reportMock), WithReportCreator(creatorMock))
+	userID := int64(106)
+
+	steps := []maxapi.Update{
+		callbackUpdate(userID, "cb1", "report:consent_yes"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "2"),
+		textUpdate(userID, "79991234567"),
+		textUpdate(userID, "ул. Мира, дом 1"),
+		textUpdate(userID, "31/03/26 14:45"),
+		textUpdate(userID, "Описание нарушения"),
+		callbackUpdate(userID, "cb2", "report:skip_media"),
+		callbackUpdate(userID, "cb3", "report:skip_extra"),
+		callbackUpdate(userID, "cb4", "report:send"),
+	}
+
+	for _, step := range steps {
+		if err := engine.HandleUpdate(context.Background(), step); err != nil {
+			t.Fatalf("HandleUpdate() error = %v", err)
+		}
+	}
+
+	if len(creatorMock.requests) != 1 {
+		t.Fatalf("expected 1 create report request, got %d", len(creatorMock.requests))
+	}
+	if reportMock.count() != 1 {
+		t.Fatalf("expected only the initial raw payload to be stored successfully, got %d", reportMock.count())
+	}
+	if !strings.Contains(mock.lastText(), "Сообщение принято с номером 15") {
+		t.Fatalf("expected final report confirmation text despite raw backfill error, got %q", mock.lastText())
 	}
 }
 
