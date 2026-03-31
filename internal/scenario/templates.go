@@ -3,9 +3,11 @@ package scenario
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"max_bot/internal/maxapi"
 	"max_bot/internal/reference"
+	"max_bot/internal/reporting"
 )
 
 func mainMenuMessage() (string, []maxapi.AttachmentRequest) {
@@ -122,6 +124,107 @@ func backToMenuKeyboard() []maxapi.AttachmentRequest {
 	return []maxapi.AttachmentRequest{
 		inlineKeyboard(row(cb("Вернуться в меню", "menu:main"))),
 	}
+}
+
+func myReportsKeyboard() []maxapi.AttachmentRequest {
+	return []maxapi.AttachmentRequest{
+		inlineKeyboard(
+			row(cb("Обновить список", "menu:my_reports")),
+			row(cb("Вернуться в меню", "menu:main")),
+		),
+	}
+}
+
+func myReportsListMessage(items []reporting.ReportSummary) string {
+	lines := []string{
+		"Ваши обращения:",
+	}
+	for i, item := range items {
+		lines = append(lines, fmt.Sprintf("%d. №%s | %s", i+1, item.ReportNumber, humanizeReportStatus(item.Status)))
+		lines = append(lines, fmt.Sprintf("   %s", formatReportMoment(item.CreatedAt, item.SendedAt)))
+		if value := strings.TrimSpace(item.CategoryName); value != "" {
+			lines = append(lines, fmt.Sprintf("   Категория: %s", value))
+		}
+		if value := strings.TrimSpace(item.Address); value != "" {
+			lines = append(lines, fmt.Sprintf("   Адрес: %s", value))
+		}
+		if value := truncateRunes(strings.TrimSpace(item.Description), 90); value != "" {
+			lines = append(lines, fmt.Sprintf("   Суть: %s", value))
+		}
+	}
+	lines = append(lines, "", "Отправьте номер обращения из списка, чтобы посмотреть подробности.")
+	return strings.Join(lines, "\n")
+}
+
+func myReportDetailMessage(index int, item *reporting.ReportDetail) string {
+	lines := []string{
+		fmt.Sprintf("Обращение %d: №%s", index, item.ReportNumber),
+		fmt.Sprintf("Статус: %s", humanizeReportStatus(item.Status)),
+		fmt.Sprintf("Дата: %s", formatReportMoment(item.CreatedAt, item.SendedAt)),
+	}
+	if value := strings.TrimSpace(item.CategoryName); value != "" {
+		lines = append(lines, fmt.Sprintf("Категория: %s", value))
+	}
+	if value := strings.TrimSpace(item.MunicipalityName); value != "" {
+		lines = append(lines, fmt.Sprintf("Муниципалитет: %s", value))
+	}
+	if value := strings.TrimSpace(item.Address); value != "" {
+		lines = append(lines, fmt.Sprintf("Адрес: %s", value))
+	}
+	if value := strings.TrimSpace(item.IncidentTime); value != "" {
+		lines = append(lines, fmt.Sprintf("Когда: %s", value))
+	}
+	if value := strings.TrimSpace(item.Description); value != "" {
+		lines = append(lines, fmt.Sprintf("Описание: %s", value))
+	}
+	if value := strings.TrimSpace(item.AdditionalInfo); value != "" {
+		lines = append(lines, fmt.Sprintf("Доп. информация: %s", value))
+	}
+	if value := strings.TrimSpace(item.Answer); value != "" {
+		lines = append(lines, fmt.Sprintf("Ответ: %s", value))
+	}
+	lines = append(lines, "", "Можно отправить номер другого обращения или нажать кнопку ниже.")
+	return strings.Join(lines, "\n")
+}
+
+func humanizeReportStatus(status string) string {
+	switch strings.TrimSpace(status) {
+	case "draft":
+		return "Черновик"
+	case "moderation":
+		return "На модерации"
+	case "in_progress":
+		return "В работе"
+	case "clarification_requested":
+		return "Запрошено уточнение"
+	case "rejected":
+		return "Отклонено"
+	case "resolved":
+		return "Рассмотрено"
+	default:
+		return status
+	}
+}
+
+func formatReportMoment(createdAt time.Time, sendedAt *time.Time) string {
+	if sendedAt != nil && !sendedAt.IsZero() {
+		return sendedAt.Format("02.01.2006 15:04")
+	}
+	if createdAt.IsZero() {
+		return "-"
+	}
+	return createdAt.Format("02.01.2006 15:04")
+}
+
+func truncateRunes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return strings.TrimSpace(string(runes[:limit])) + "..."
 }
 
 func inlineKeyboard(rows ...[]maxapi.Button) maxapi.AttachmentRequest {

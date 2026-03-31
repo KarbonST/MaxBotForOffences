@@ -56,11 +56,12 @@ func main() {
 		HTTPClient: &http.Client{Timeout: cfg.CoreAPITimeout},
 	})
 
-	engineOptions := make([]scenario.Option, 0, 2)
+	engineOptions := make([]scenario.Option, 0, 3)
 	closers := make([]io.Closer, 0, 1)
 	defer closeAll(closers, logger)
 
 	engineOptions = append(engineOptions, scenario.WithReportCreator(reportClient))
+	engineOptions = append(engineOptions, scenario.WithReportReader(reportClient))
 
 	if cfg.ReportPipelineEnabled {
 		if cfg.ReportDatabaseURL == "" {

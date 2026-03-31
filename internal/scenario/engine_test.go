@@ -33,6 +33,12 @@ type reportCreatorMock struct {
 	result   *reporting.CreatedReport
 }
 
+type reportReaderMock struct {
+	mu      sync.Mutex
+	items   []reporting.ReportSummary
+	details map[int64]*reporting.ReportDetail
+}
+
 type referenceProviderMock struct{}
 
 func (referenceProviderMock) Categories(context.Context) ([]reference.Item, error) {
@@ -115,6 +121,26 @@ func (m *reportCreatorMock) CreateReport(_ context.Context, req reporting.Create
 		Stage:        "sended",
 		CreatedAt:    time.Now().UTC(),
 	}, nil
+}
+
+func (m *reportReaderMock) ListReportsByMaxUserID(_ context.Context, _ int64) ([]reporting.ReportSummary, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	result := make([]reporting.ReportSummary, len(m.items))
+	copy(result, m.items)
+	return result, nil
+}
+
+func (m *reportReaderMock) GetReportByID(_ context.Context, id int64) (*reporting.ReportDetail, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if item, ok := m.details[id]; ok {
+		copy := *item
+		return &copy, nil
+	}
+	return nil, reporting.ErrNotFound
 }
 
 func TestFlowHappyPathToConfirm(t *testing.T) {
@@ -312,6 +338,98 @@ func TestFlowValidationIncidentTimeError(t *testing.T) {
 	}
 	if !strings.Contains(mock.lastText(), "формате дд/мм/гг чч:мм") {
 		t.Fatalf("expected incident time validation text, got %q", mock.lastText())
+	}
+}
+
+func TestFlowMyReportsShowsListAndDetails(t *testing.T) {
+	mock := &senderMock{}
+	readerMock := &reportReaderMock{
+		items: []reporting.ReportSummary{
+			{
+				ID:               15,
+				ReportNumber:     "15",
+				MaxUserID:        777,
+				CategoryName:     "Парковка",
+				MunicipalityName: "Волжский",
+				Status:           "moderation",
+				Description:      "Машина перекрыла проезд",
+				Address:          "ул. Мира, 1",
+				CreatedAt:        time.Date(2026, time.March, 31, 12, 0, 0, 0, time.UTC),
+			},
+			{
+				ID:               16,
+				ReportNumber:     "16",
+				MaxUserID:        777,
+				CategoryName:     "Шум",
+				MunicipalityName: "Волгоград",
+				Status:           "in_progress",
+				Description:      "Шумели ночью возле дома",
+				Address:          "ул. Ленина, 2",
+				CreatedAt:        time.Date(2026, time.March, 31, 13, 0, 0, 0, time.UTC),
+			},
+		},
+		details: map[int64]*reporting.ReportDetail{
+			16: {
+				ReportSummary: reporting.ReportSummary{
+					ID:               16,
+					ReportNumber:     "16",
+					MaxUserID:        777,
+					CategoryName:     "Шум",
+					MunicipalityName: "Волгоград",
+					Status:           "in_progress",
+					Description:      "Шумели ночью возле дома",
+					Address:          "ул. Ленина, 2",
+					CreatedAt:        time.Date(2026, time.March, 31, 13, 0, 0, 0, time.UTC),
+				},
+				IncidentTime:   "31/03/26 01:15",
+				AdditionalInfo: "Во дворе кафе",
+			},
+		},
+	}
+	engine := New(mock, referenceProviderMock{}, WithReportReader(readerMock))
+	userID := int64(777)
+
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb1", "menu:my_reports")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	if !strings.Contains(mock.lastText(), "Ваши обращения:") {
+		t.Fatalf("expected reports list text, got %q", mock.lastText())
+	}
+	if !strings.Contains(mock.lastText(), "2. №16 | В работе") {
+		t.Fatalf("expected second report summary in list, got %q", mock.lastText())
+	}
+
+	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "2")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	if !strings.Contains(mock.lastText(), "Обращение 2: №16") {
+		t.Fatalf("expected selected report detail, got %q", mock.lastText())
+	}
+	if !strings.Contains(mock.lastText(), "Доп. информация: Во дворе кафе") {
+		t.Fatalf("expected additional info in detail, got %q", mock.lastText())
+	}
+
+	session := engine.session(userID)
+	if session.State != stateMyReportsList {
+		t.Fatalf("expected state %q after showing report detail, got %q", stateMyReportsList, session.State)
+	}
+	if len(session.Reports) != 2 {
+		t.Fatalf("expected 2 cached reports in session, got %d", len(session.Reports))
+	}
+}
+
+func TestFlowMyReportsEmpty(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{}, WithReportReader(&reportReaderMock{}))
+
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(778, "cb1", "menu:my_reports")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	if !strings.Contains(mock.lastText(), "У вас пока нет отправленных обращений.") {
+		t.Fatalf("expected empty reports message, got %q", mock.lastText())
 	}
 }
 

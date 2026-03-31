@@ -28,6 +28,7 @@ const (
 	stateReportMedia     = "report_media"
 	stateReportExtra     = "report_extra"
 	stateReportConfirm   = "report_confirm"
+	stateMyReportsList   = "my_reports_list"
 )
 
 var phoneRe = regexp.MustCompile(`^[78]\d{10}$`)
@@ -37,6 +38,7 @@ type Engine struct {
 	refData       reference.Provider
 	reportSink    ReportSink
 	reportCreator ReportCreator
+	reportReader  ReportReader
 	mu            sync.Mutex
 	sessions      map[int64]*Session
 }
@@ -51,6 +53,7 @@ type Session struct {
 	StartedAt time.Time
 	Draft     Draft
 	Trace     []report.DialogStep
+	Reports   []reporting.ReportSummary
 }
 
 type Draft struct {
@@ -74,6 +77,11 @@ type ReportCreator interface {
 	CreateReport(context.Context, reporting.CreateReportRequest) (*reporting.CreatedReport, error)
 }
 
+type ReportReader interface {
+	ListReportsByMaxUserID(context.Context, int64) ([]reporting.ReportSummary, error)
+	GetReportByID(context.Context, int64) (*reporting.ReportDetail, error)
+}
+
 type Option func(*Engine)
 
 func WithReportSink(sink ReportSink) Option {
@@ -92,12 +100,21 @@ func WithReportCreator(creator ReportCreator) Option {
 	}
 }
 
+func WithReportReader(reader ReportReader) Option {
+	return func(e *Engine) {
+		if reader != nil {
+			e.reportReader = reader
+		}
+	}
+}
+
 func New(client Sender, refData reference.Provider, options ...Option) *Engine {
 	engine := &Engine{
 		client:        client,
 		refData:       refData,
 		reportSink:    noopReportSink{},
 		reportCreator: noopReportCreator{},
+		reportReader:  noopReportReader{},
 		sessions:      make(map[int64]*Session),
 	}
 	for _, option := range options {
@@ -119,6 +136,16 @@ func (noopReportCreator) CreateReport(context.Context, reporting.CreateReportReq
 		Status:       "moderation",
 		Stage:        "sended",
 	}, nil
+}
+
+type noopReportReader struct{}
+
+func (noopReportReader) ListReportsByMaxUserID(context.Context, int64) ([]reporting.ReportSummary, error) {
+	return nil, nil
+}
+
+func (noopReportReader) GetReportByID(context.Context, int64) (*reporting.ReportDetail, error) {
+	return nil, reporting.ErrNotFound
 }
 
 func (e *Engine) HandleUpdate(ctx context.Context, upd maxapi.Update) error {
@@ -179,7 +206,17 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 		text, attachments := consentMessage()
 		return e.reply(ctx, userID, text, attachments)
 	case "menu:my_reports":
-		return e.sendText(ctx, userID, "Раздел \"Мои сообщения\" пока заглушка. Позже сюда подключим бэкенд и реальные сообщения.", backToMenuKeyboard())
+		items, err := e.reportReader.ListReportsByMaxUserID(ctx, userID)
+		if err != nil {
+			slog.Error("не удалось загрузить обращения пользователя", "user_id", userID, "error", err.Error())
+			return e.sendText(ctx, userID, "Не удалось загрузить ваши обращения. Попробуйте ещё раз немного позже.", backToMenuKeyboard())
+		}
+		if len(items) == 0 {
+			return e.sendText(ctx, userID, "У вас пока нет отправленных обращений.", backToMenuKeyboard())
+		}
+		session.Reports = append([]reporting.ReportSummary(nil), items...)
+		session.State = stateMyReportsList
+		return e.sendText(ctx, userID, myReportsListMessage(items), myReportsKeyboard())
 	case "report:consent_yes":
 		categories, err := e.loadCategories(ctx)
 		if err != nil {
@@ -227,6 +264,21 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 	}
 
 	switch session.State {
+	case stateMyReportsList:
+		if len(session.Reports) == 0 {
+			return e.sendText(ctx, userID, "Список обращений устарел. Нажмите \"Обновить список\" или вернитесь в меню.", myReportsKeyboard())
+		}
+		index, ok := parseChoice(text, len(session.Reports))
+		if !ok {
+			return e.sendText(ctx, userID, "Отправьте номер обращения из списка, чтобы посмотреть подробности.", myReportsKeyboard())
+		}
+		selected := session.Reports[index-1]
+		detail, err := e.reportReader.GetReportByID(ctx, selected.ID)
+		if err != nil {
+			slog.Error("не удалось загрузить карточку обращения", "user_id", userID, "report_id", selected.ID, "error", err.Error())
+			return e.sendText(ctx, userID, "Не удалось загрузить подробную информацию по обращению. Попробуйте ещё раз.", myReportsKeyboard())
+		}
+		return e.sendText(ctx, userID, myReportDetailMessage(index, detail), myReportsKeyboard())
 	case stateReportCategory:
 		categories, err := e.loadCategories(ctx)
 		if err != nil {
