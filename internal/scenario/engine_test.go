@@ -2,6 +2,7 @@ package scenario
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -240,6 +241,26 @@ func TestFlowValidationIncidentTimeError(t *testing.T) {
 	}
 	if !strings.Contains(mock.lastText(), "формате дд/мм/гг чч:мм") {
 		t.Fatalf("expected incident time validation text, got %q", mock.lastText())
+	}
+}
+
+func TestParsePhoneFromContactAttachment(t *testing.T) {
+	raw, err := json.Marshal(map[string]any{
+		"vcf_info": "BEGIN:VCARD\r\nVERSION:3.0\r\nTEL;TYPE=cell:79616594137\r\nFN:Михаил\r\nEND:VCARD\r\n",
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	phone := parsePhone("", []maxapi.AttachmentBody{
+		{
+			Type:       "contact",
+			RawPayload: raw,
+		},
+	})
+
+	if phone != "79616594137" {
+		t.Fatalf("expected phone from contact attachment, got %q", phone)
 	}
 }
 

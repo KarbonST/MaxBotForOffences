@@ -505,9 +505,44 @@ func parsePhone(text string, attachments []maxapi.AttachmentBody) string {
 		if err := json.Unmarshal(item.RawPayload, &payload); err != nil {
 			continue
 		}
-		if phone := normalizePhone(payload.VCFPhone); phone != "" {
+		if phone := phoneFromContactPayload(payload); phone != "" {
 			return phone
 		}
+	}
+
+	return ""
+}
+
+func phoneFromContactPayload(payload maxapi.ContactPayload) string {
+	if phone := normalizePhone(payload.VCFPhone); phone != "" {
+		return phone
+	}
+	if phone := normalizePhone(extractPhoneFromVCF(payload.VCFInfo)); phone != "" {
+		return phone
+	}
+	return ""
+}
+
+func extractPhoneFromVCF(vcf string) string {
+	if strings.TrimSpace(vcf) == "" {
+		return ""
+	}
+
+	normalized := strings.ReplaceAll(vcf, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+
+	for _, line := range strings.Split(normalized, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.HasPrefix(strings.ToUpper(line), "TEL") {
+			continue
+		}
+
+		separator := strings.LastIndex(line, ":")
+		if separator < 0 || separator == len(line)-1 {
+			continue
+		}
+
+		return digitsOnly(line[separator+1:])
 	}
 
 	return ""

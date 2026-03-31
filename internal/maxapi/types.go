@@ -68,6 +68,7 @@ type AttachmentBody struct {
 type ContactPayload struct {
 	Name     string `json:"name"`
 	VCFPhone string `json:"vcf_phone"`
+	VCFInfo  string `json:"vcf_info"`
 }
 
 type NewMessageBody struct {
