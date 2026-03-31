@@ -273,6 +273,9 @@ func TestFlowSendDraftStoresDialogPayload(t *testing.T) {
 	if !strings.Contains(mock.lastText(), "Сообщение принято с номером 15") {
 		t.Fatalf("expected final report confirmation text, got %q", mock.lastText())
 	}
+	if !strings.Contains(mock.lastText(), "Текущий статус: На модерации.") {
+		t.Fatalf("expected humanized status in final confirmation, got %q", mock.lastText())
+	}
 }
 
 func TestFlowSendDraftKeepsSuccessWhenRawBackfillFails(t *testing.T) {
@@ -309,6 +312,9 @@ func TestFlowSendDraftKeepsSuccessWhenRawBackfillFails(t *testing.T) {
 	}
 	if !strings.Contains(mock.lastText(), "Сообщение принято с номером 15") {
 		t.Fatalf("expected final report confirmation text despite raw backfill error, got %q", mock.lastText())
+	}
+	if !strings.Contains(mock.lastText(), "Текущий статус: На модерации.") {
+		t.Fatalf("expected humanized status in final confirmation despite raw backfill error, got %q", mock.lastText())
 	}
 }
 

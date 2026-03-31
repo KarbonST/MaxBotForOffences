@@ -399,7 +399,7 @@ func (e *Engine) finishDraft(ctx context.Context, userID int64) error {
 
 	slog.Info("черновик принят", "user_id", userID, "report_number", created.ReportNumber, "dedup_key", payload.DedupKey)
 	e.resetSession(userID)
-	return e.sendText(ctx, userID, "Сообщение принято с номером "+created.ReportNumber+".\n\nТекущий статус: "+created.Status+".", backToMenuKeyboard())
+	return e.sendText(ctx, userID, "Сообщение принято с номером "+created.ReportNumber+".\n\nТекущий статус: "+humanizeReportStatus(created.Status)+".", backToMenuKeyboard())
 }
 
 func (e *Engine) sendDraftSummary(ctx context.Context, userID int64) error {
