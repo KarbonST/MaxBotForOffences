@@ -123,10 +123,18 @@ func extraInfoKeyboard() []maxapi.AttachmentRequest {
 	}
 }
 
-func mediaKeyboard() []maxapi.AttachmentRequest {
+func mediaKeyboard(allowSkip bool) []maxapi.AttachmentRequest {
+	if allowSkip {
+		return []maxapi.AttachmentRequest{
+			inlineKeyboard(
+				row(cb("Пропустить", "report:skip_media")),
+				row(cb("Вернуться в меню", "menu:main")),
+			),
+		}
+	}
+
 	return []maxapi.AttachmentRequest{
 		inlineKeyboard(
-			row(cb("Пропустить", "report:skip_media")),
 			row(cb("Вернуться в меню", "menu:main")),
 		),
 	}

@@ -40,8 +40,8 @@ type reportReaderMock struct {
 }
 
 type conversationStoreMock struct {
-	mu          sync.Mutex
-	state       *reporting.ConversationState
+	mu           sync.Mutex
+	state        *reporting.ConversationState
 	saveRequests []reporting.SaveConversationRequest
 }
 
@@ -49,7 +49,7 @@ type referenceProviderMock struct{}
 
 func (referenceProviderMock) Categories(context.Context) ([]reference.Item, error) {
 	return []reference.Item{
-		{ID: 11, Sorting: 1, Name: "Категория 1"},
+		{ID: 11, Sorting: 1, Name: "Тишина и покой в ночное время"},
 		{ID: 12, Sorting: 2, Name: "Категория 2"},
 	}, nil
 }
@@ -94,6 +94,10 @@ func (m *senderMock) messageTexts() []string {
 	return result
 }
 
+func (m *senderMock) texts() []string {
+	return m.messageTexts()
+}
+
 func (m *senderMock) lastMessage() maxapi.NewMessageBody {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -114,7 +118,6 @@ func inlineKeyboardPayload(t *testing.T, body maxapi.NewMessageBody) maxapi.Inli
 	}
 	return payload
 }
-
 func (m *reportSinkMock) Store(_ context.Context, payload report.DialogPayload) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -290,6 +293,27 @@ func TestFlowFallbackToMenuForUnknownState(t *testing.T) {
 	}
 	if !strings.Contains(texts[1], "Главное меню") {
 		t.Fatalf("expected main menu response second, got %q", texts[1])
+	}
+}
+
+func TestUnsupportedInputShowsNoticeAndRedirectsToMenu(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{})
+	userID := int64(1034)
+
+	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "непредусмотренный ввод")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	texts := mock.texts()
+	if len(texts) < 2 {
+		t.Fatalf("expected at least 2 bot messages, got %d", len(texts))
+	}
+	if !strings.Contains(texts[len(texts)-2], "Не могу распознать вашу команду, вы будете перенаправлены в главное меню.") {
+		t.Fatalf("expected unsupported-input notice before redirect, got %q", texts[len(texts)-2])
+	}
+	if !strings.Contains(texts[len(texts)-1], "Главное меню") {
+		t.Fatalf("expected main menu message after redirect, got %q", texts[len(texts)-1])
 	}
 }
 
@@ -645,6 +669,78 @@ func TestFlowValidationIncidentTimeError(t *testing.T) {
 	}
 }
 
+func TestFlowSkipMediaNotAllowedForNonQuietCategory(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{})
+	userID := int64(106)
+
+	steps := []maxapi.Update{
+		callbackUpdate(userID, "cb1", "report:consent_yes"),
+		textUpdate(userID, "2"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "89991234567"),
+		textUpdate(userID, "ул. Мира, дом 1"),
+		textUpdate(userID, "31/03/26 14:45"),
+		textUpdate(userID, "Описание нарушения"),
+		callbackUpdate(userID, "cb2", "report:skip_media"),
+	}
+
+	for _, step := range steps {
+		if err := engine.HandleUpdate(context.Background(), step); err != nil {
+			t.Fatalf("HandleUpdate() error = %v", err)
+		}
+	}
+
+	session := engine.session(userID)
+	if session.State != stateReportMedia {
+		t.Fatalf("expected state %q, got %q", stateReportMedia, session.State)
+	}
+	if !strings.Contains(mock.lastText(), "только для категории «Тишина и покой»") {
+		t.Fatalf("expected skip media restriction message, got %q", mock.lastText())
+	}
+}
+
+func TestFlowRejectsMediaWhenVideoDurationTooLong(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{})
+	userID := int64(107)
+
+	prepareSteps := []maxapi.Update{
+		callbackUpdate(userID, "cb1", "report:consent_yes"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "89991234567"),
+		textUpdate(userID, "ул. Мира, дом 1"),
+		textUpdate(userID, "31/03/26 14:45"),
+		textUpdate(userID, "Описание нарушения"),
+	}
+
+	for _, step := range prepareSteps {
+		if err := engine.HandleUpdate(context.Background(), step); err != nil {
+			t.Fatalf("HandleUpdate() error = %v", err)
+		}
+	}
+
+	raw, err := json.Marshal(map[string]any{"duration": 121})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	if err := engine.HandleUpdate(context.Background(), messageWithAttachmentsUpdate(userID, "", []maxapi.AttachmentBody{
+		{Type: "video", RawPayload: raw},
+	})); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	session := engine.session(userID)
+	if session.State != stateReportMedia {
+		t.Fatalf("expected state %q, got %q", stateReportMedia, session.State)
+	}
+	if !strings.Contains(mock.lastText(), "превышает 2 минуты") {
+		t.Fatalf("expected video duration limit message, got %q", mock.lastText())
+	}
+}
+
 func TestFlowMyReportsShowsListAndDetails(t *testing.T) {
 	mock := &senderMock{}
 	readerMock := &reportReaderMock{
@@ -809,6 +905,19 @@ func textUpdate(userID int64, text string) maxapi.Update {
 		Message: &maxapi.Message{
 			Sender: &maxapi.User{UserID: userID},
 			Body:   maxapi.MessageBody{Text: text},
+		},
+	}
+}
+
+func messageWithAttachmentsUpdate(userID int64, text string, attachments []maxapi.AttachmentBody) maxapi.Update {
+	return maxapi.Update{
+		UpdateType: "message_created",
+		Message: &maxapi.Message{
+			Sender: &maxapi.User{UserID: userID},
+			Body: maxapi.MessageBody{
+				Text:        text,
+				Attachments: attachments,
+			},
 		},
 	}
 }

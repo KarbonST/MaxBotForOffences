@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -18,6 +19,8 @@ import (
 )
 
 var phoneRe = regexp.MustCompile(`^[78]\d{10}$`)
+
+const maxTotalVideoDurationSeconds = 120
 
 type Engine struct {
 	client        Sender
@@ -271,6 +274,9 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 		}
 		return e.sendText(ctx, userID, categoriesPrompt(categories), backToMenuKeyboard())
 	case "report:skip_media":
+		if !canSkipMedia(session.Draft) {
+			return e.sendText(ctx, userID, "Пропуск вложений доступен только для категории «Тишина и покой». Отправьте фото и/или видео.", mediaKeyboard(false))
+		}
 		e.setState(userID, stateReportExtra)
 		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
 			return err
@@ -437,17 +443,35 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
 			return err
 		}
-		return e.sendText(ctx, userID, "Отправьте фото/видео или нажмите \"Пропустить\".", mediaKeyboard())
+		allowSkip := canSkipMedia(session.Draft)
+		if allowSkip {
+			return e.sendText(ctx, userID, "Отправьте фото/видео или нажмите \"Пропустить\".", mediaKeyboard(true))
+		}
+		return e.sendText(ctx, userID, "Отправьте фото/видео.", mediaKeyboard(false))
 	case stateReportMedia:
+		allowSkip := canSkipMedia(session.Draft)
 		if len(attachments) == 0 {
-			return e.sendText(ctx, userID, "На этом шаге ждём фото/видео или кнопку \"Пропустить\".", mediaKeyboard())
+			if allowSkip {
+				return e.sendText(ctx, userID, "На этом шаге ждём фото/видео или кнопку \"Пропустить\".", mediaKeyboard(true))
+			}
+			return e.sendText(ctx, userID, "На этом шаге ждём фото/видео.", mediaKeyboard(false))
 		}
 		if len(attachments) > 5 {
-			return e.sendText(ctx, userID, "Получено больше 5 вложений. Повторите попытку.", mediaKeyboard())
+			return e.sendText(ctx, userID, "Получено больше 5 вложений. Повторите попытку.", mediaKeyboard(allowSkip))
+		}
+		totalVideoDuration, err := totalVideoDurationSeconds(attachments)
+		if err != nil {
+			return e.sendText(ctx, userID, "Не удалось определить длительность видео. Проверьте вложения и повторите попытку.", mediaKeyboard(allowSkip))
+		}
+		if totalVideoDuration > maxTotalVideoDurationSeconds {
+			return e.sendText(ctx, userID, "Суммарная длительность видео превышает 2 минуты. Сократите длительность и отправьте вложения снова.", mediaKeyboard(allowSkip))
 		}
 		logs, ok := attachmentSummary(attachments)
 		if !ok {
-			return e.sendText(ctx, userID, "Поддерживаются только фото, видео, контакт и геолокация для теста. Попробуйте ещё раз или пропустите шаг.", mediaKeyboard())
+			if allowSkip {
+				return e.sendText(ctx, userID, "Поддерживаются только фото, видео, контакт и геолокация для теста. Попробуйте ещё раз или пропустите шаг.", mediaKeyboard(true))
+			}
+			return e.sendText(ctx, userID, "Поддерживаются только фото, видео, контакт и геолокация для теста. Попробуйте ещё раз.", mediaKeyboard(false))
 		}
 		session.Draft.AttachmentLog = append(session.Draft.AttachmentLog, logs...)
 		applyState(session, stateReportExtra)
@@ -876,6 +900,138 @@ func parseIncidentTime(value string) (string, bool) {
 		return "", false
 	}
 	return parsed.Format(layout), true
+}
+
+func canSkipMedia(draft Draft) bool {
+	if draft.CategoryID == 10 {
+		return true
+	}
+
+	name := strings.ToLower(strings.TrimSpace(draft.CategoryName))
+	return strings.Contains(name, "тишина") && strings.Contains(name, "покой")
+}
+
+func totalVideoDurationSeconds(items []maxapi.AttachmentBody) (int, error) {
+	total := 0
+	for _, item := range items {
+		if item.Type != "video" {
+			continue
+		}
+		seconds, err := extractVideoDurationSeconds(item.RawPayload)
+		if err != nil {
+			return 0, err
+		}
+		total += seconds
+	}
+	return total, nil
+}
+
+func extractVideoDurationSeconds(raw json.RawMessage) (int, error) {
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return 0, fmt.Errorf("empty video payload")
+	}
+
+	var payload any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return 0, fmt.Errorf("decode video payload: %w", err)
+	}
+
+	seconds, ok := findDurationSeconds(payload, 0)
+	if !ok || seconds <= 0 {
+		return 0, fmt.Errorf("video duration not found")
+	}
+	return seconds, nil
+}
+
+func findDurationSeconds(value any, depth int) (int, bool) {
+	if depth > 6 {
+		return 0, false
+	}
+
+	switch typed := value.(type) {
+	case map[string]any:
+		priorityKeys := []string{
+			"duration",
+			"duration_seconds",
+			"video_duration",
+			"length_seconds",
+			"duration_ms",
+			"duration_millis",
+			"duration_milliseconds",
+		}
+		for _, key := range priorityKeys {
+			if raw, ok := typed[key]; ok {
+				if seconds, ok := durationToSeconds(key, raw); ok {
+					return seconds, true
+				}
+			}
+		}
+
+		for key, raw := range typed {
+			lower := strings.ToLower(key)
+			if strings.Contains(lower, "duration") || strings.Contains(lower, "length") {
+				if seconds, ok := durationToSeconds(lower, raw); ok {
+					return seconds, true
+				}
+			}
+		}
+
+		for _, nested := range typed {
+			if seconds, ok := findDurationSeconds(nested, depth+1); ok {
+				return seconds, true
+			}
+		}
+	case []any:
+		for _, nested := range typed {
+			if seconds, ok := findDurationSeconds(nested, depth+1); ok {
+				return seconds, true
+			}
+		}
+	}
+
+	return 0, false
+}
+
+func durationToSeconds(key string, raw any) (int, bool) {
+	value, ok := anyToFloat(raw)
+	if !ok || value <= 0 {
+		return 0, false
+	}
+
+	lower := strings.ToLower(key)
+	if strings.Contains(lower, "ms") || strings.Contains(lower, "milli") {
+		return int(math.Ceil(value / 1000)), true
+	}
+	return int(math.Ceil(value)), true
+}
+
+func anyToFloat(raw any) (float64, bool) {
+	switch value := raw.(type) {
+	case float64:
+		return value, true
+	case float32:
+		return float64(value), true
+	case int:
+		return float64(value), true
+	case int64:
+		return float64(value), true
+	case int32:
+		return float64(value), true
+	case json.Number:
+		parsed, err := value.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
 }
 
 func digitsOnly(value string) string {
