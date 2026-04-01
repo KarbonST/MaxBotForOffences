@@ -62,6 +62,7 @@ func main() {
 
 	engineOptions = append(engineOptions, scenario.WithReportCreator(reportClient))
 	engineOptions = append(engineOptions, scenario.WithReportReader(reportClient))
+	engineOptions = append(engineOptions, scenario.WithConversationStore(reportClient))
 
 	if cfg.ReportPipelineEnabled {
 		if cfg.ReportDatabaseURL == "" {

@@ -39,6 +39,12 @@ type reportReaderMock struct {
 	details map[int64]*reporting.ReportDetail
 }
 
+type conversationStoreMock struct {
+	mu          sync.Mutex
+	state       *reporting.ConversationState
+	saveRequests []reporting.SaveConversationRequest
+}
+
 type referenceProviderMock struct{}
 
 func (referenceProviderMock) Categories(context.Context) ([]reference.Item, error) {
@@ -141,6 +147,36 @@ func (m *reportReaderMock) GetReportByID(_ context.Context, id int64) (*reportin
 		return &copy, nil
 	}
 	return nil, reporting.ErrNotFound
+}
+
+func (m *conversationStoreMock) GetConversation(_ context.Context, _ int64) (*reporting.ConversationState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.state == nil {
+		return &reporting.ConversationState{Stage: reporting.UserStageMainMenu}, nil
+	}
+	copy := *m.state
+	if m.state.ActiveDraft != nil {
+		draft := *m.state.ActiveDraft
+		copy.ActiveDraft = &draft
+	}
+	return &copy, nil
+}
+
+func (m *conversationStoreMock) SaveConversation(_ context.Context, req reporting.SaveConversationRequest) (*reporting.ConversationState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.saveRequests = append(m.saveRequests, req)
+	state := &reporting.ConversationState{
+		MaxUserID: req.MaxUserID,
+		Stage:     req.UserStage,
+	}
+	if req.ActiveDraft != nil {
+		draft := *req.ActiveDraft
+		state.ActiveDraft = &draft
+	}
+	m.state = state
+	return state, nil
 }
 
 func TestFlowHappyPathToConfirm(t *testing.T) {
@@ -488,8 +524,8 @@ func TestFlowMyReportsShowsListAndDetails(t *testing.T) {
 	}
 
 	session := engine.session(userID)
-	if session.State != stateMyReportsList {
-		t.Fatalf("expected state %q after showing report detail, got %q", stateMyReportsList, session.State)
+	if session.State != stateMyReportDetail {
+		t.Fatalf("expected state %q after showing report detail, got %q", stateMyReportDetail, session.State)
 	}
 	if len(session.Reports) != 2 {
 		t.Fatalf("expected 2 cached reports in session, got %d", len(session.Reports))
@@ -526,6 +562,43 @@ func TestParsePhoneFromContactAttachment(t *testing.T) {
 
 	if phone != "79616594137" {
 		t.Fatalf("expected phone from contact attachment, got %q", phone)
+	}
+}
+
+func TestFlowPersistsDraftStagesToConversationStore(t *testing.T) {
+	mock := &senderMock{}
+	conversationMock := &conversationStoreMock{}
+	engine := New(mock, referenceProviderMock{}, WithConversationStore(conversationMock))
+	userID := int64(880)
+
+	steps := []maxapi.Update{
+		callbackUpdate(userID, "cb1", "menu:report"),
+		callbackUpdate(userID, "cb2", "report:consent_yes"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "2"),
+	}
+
+	for _, step := range steps {
+		if err := engine.HandleUpdate(context.Background(), step); err != nil {
+			t.Fatalf("HandleUpdate() error = %v", err)
+		}
+	}
+
+	if len(conversationMock.saveRequests) == 0 {
+		t.Fatalf("expected saved conversation requests, got none")
+	}
+	last := conversationMock.saveRequests[len(conversationMock.saveRequests)-1]
+	if last.UserStage != reporting.UserStageFillingReport {
+		t.Fatalf("expected user stage filling_report, got %q", last.UserStage)
+	}
+	if last.ActiveDraft == nil || last.ActiveDraft.Stage != reporting.MessageStagePhone {
+		t.Fatalf("expected active draft at phone step, got %+v", last.ActiveDraft)
+	}
+	if last.ActiveDraft.CategoryID != 11 {
+		t.Fatalf("expected category id to be persisted, got %+v", last.ActiveDraft)
+	}
+	if last.ActiveDraft.MunicipalityID != 22 {
+		t.Fatalf("expected municipality id to be persisted, got %+v", last.ActiveDraft)
 	}
 }
 

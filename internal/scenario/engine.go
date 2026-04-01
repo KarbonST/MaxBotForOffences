@@ -17,20 +17,6 @@ import (
 	"max_bot/internal/reporting"
 )
 
-const (
-	stateMainMenu        = "main_menu"
-	stateReportCategory  = "report_category"
-	stateReportMunicipal = "report_municipality"
-	stateReportPhone     = "report_phone"
-	stateReportAddress   = "report_address"
-	stateReportTime      = "report_time"
-	stateReportDesc      = "report_description"
-	stateReportMedia     = "report_media"
-	stateReportExtra     = "report_extra"
-	stateReportConfirm   = "report_confirm"
-	stateMyReportsList   = "my_reports_list"
-)
-
 var phoneRe = regexp.MustCompile(`^[78]\d{10}$`)
 
 type Engine struct {
@@ -39,6 +25,7 @@ type Engine struct {
 	reportSink    ReportSink
 	reportCreator ReportCreator
 	reportReader  ReportReader
+	conversations ConversationStore
 	mu            sync.Mutex
 	sessions      map[int64]*Session
 }
@@ -49,11 +36,14 @@ type Sender interface {
 }
 
 type Session struct {
-	State     string
-	StartedAt time.Time
-	Draft     Draft
-	Trace     []report.DialogStep
-	Reports   []reporting.ReportSummary
+	State        BotState
+	UserStage    reporting.UserStage
+	MessageStage reporting.MessageStage
+	StartedAt    time.Time
+	Draft        Draft
+	Trace        []report.DialogStep
+	Reports      []reporting.ReportSummary
+	Loaded       bool
 }
 
 type Draft struct {
@@ -82,6 +72,11 @@ type ReportReader interface {
 	GetReportByID(context.Context, int64) (*reporting.ReportDetail, error)
 }
 
+type ConversationStore interface {
+	GetConversation(context.Context, int64) (*reporting.ConversationState, error)
+	SaveConversation(context.Context, reporting.SaveConversationRequest) (*reporting.ConversationState, error)
+}
+
 type Option func(*Engine)
 
 func WithReportSink(sink ReportSink) Option {
@@ -108,6 +103,14 @@ func WithReportReader(reader ReportReader) Option {
 	}
 }
 
+func WithConversationStore(store ConversationStore) Option {
+	return func(e *Engine) {
+		if store != nil {
+			e.conversations = store
+		}
+	}
+}
+
 func New(client Sender, refData reference.Provider, options ...Option) *Engine {
 	engine := &Engine{
 		client:        client,
@@ -115,6 +118,7 @@ func New(client Sender, refData reference.Provider, options ...Option) *Engine {
 		reportSink:    noopReportSink{},
 		reportCreator: noopReportCreator{},
 		reportReader:  noopReportReader{},
+		conversations: noopConversationStore{},
 		sessions:      make(map[int64]*Session),
 	}
 	for _, option := range options {
@@ -148,6 +152,24 @@ func (noopReportReader) GetReportByID(context.Context, int64) (*reporting.Report
 	return nil, reporting.ErrNotFound
 }
 
+type noopConversationStore struct{}
+
+func (noopConversationStore) GetConversation(context.Context, int64) (*reporting.ConversationState, error) {
+	return &reporting.ConversationState{Stage: reporting.UserStageMainMenu}, nil
+}
+
+func (noopConversationStore) SaveConversation(_ context.Context, req reporting.SaveConversationRequest) (*reporting.ConversationState, error) {
+	state := &reporting.ConversationState{
+		MaxUserID: req.MaxUserID,
+		Stage:     req.UserStage,
+	}
+	if req.ActiveDraft != nil {
+		copied := *req.ActiveDraft
+		state.ActiveDraft = &copied
+	}
+	return state, nil
+}
+
 func (e *Engine) HandleUpdate(ctx context.Context, upd maxapi.Update) error {
 	switch upd.UpdateType {
 	case "bot_started":
@@ -174,10 +196,13 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 	userID := upd.Callback.User.UserID
 	payload := upd.Callback.Payload
 	session := e.session(userID)
+	if err := e.ensureSessionLoaded(ctx, userID, session); err != nil {
+		return e.sendText(ctx, userID, "Не удалось восстановить ваше состояние. Попробуйте ещё раз немного позже.", backToMenuKeyboard())
+	}
 	e.appendTrace(userID, report.DialogStep{
 		At:      time.Now().UTC(),
 		Kind:    "callback",
-		State:   session.State,
+		State:   string(session.State),
 		Payload: payload,
 	})
 	slog.Info("получен callback", "user_id", userID, "payload", payload)
@@ -192,6 +217,10 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 	case "menu:about":
 		return e.showAbout(ctx, userID)
 	case "menu:legal":
+		e.setState(userID, stateLegalInfo)
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
 		text, attachments := legalMessage()
 		return e.reply(ctx, userID, text, attachments)
 	case "menu:violations":
@@ -199,9 +228,17 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 		if err != nil {
 			return e.sendReferenceLookupError(ctx, userID)
 		}
+		e.setState(userID, stateViolationsList)
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
 		text, attachments := violationsMessage(categories)
 		return e.reply(ctx, userID, text, attachments)
 	case "menu:report":
+		e.setState(userID, stateReportConsent)
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
 		text, attachments := consentMessage()
 		return e.reply(ctx, userID, text, attachments)
 	case "menu:my_reports":
@@ -211,10 +248,17 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 			return e.sendText(ctx, userID, "Не удалось загрузить ваши обращения. Попробуйте ещё раз немного позже.", backToMenuKeyboard())
 		}
 		if len(items) == 0 {
+			e.setState(userID, stateMyReportsList)
+			if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+				return err
+			}
 			return e.sendText(ctx, userID, "У вас пока нет отправленных обращений.", backToMenuKeyboard())
 		}
 		session.Reports = append([]reporting.ReportSummary(nil), items...)
-		session.State = stateMyReportsList
+		applyState(session, stateMyReportsList)
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
 		return e.sendText(ctx, userID, myReportsListMessage(items), myReportsKeyboard())
 	case "report:consent_yes":
 		categories, err := e.loadCategories(ctx)
@@ -222,17 +266,30 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 			return e.sendReferenceLookupError(ctx, userID)
 		}
 		e.setState(userID, stateReportCategory)
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
 		return e.sendText(ctx, userID, categoriesPrompt(categories), backToMenuKeyboard())
 	case "report:skip_media":
 		e.setState(userID, stateReportExtra)
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
 		return e.sendText(ctx, userID, "Напишите дополнительную информацию или нажмите \"Пропустить\".", extraInfoKeyboard())
 	case "report:skip_extra":
 		e.setState(userID, stateReportConfirm)
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
 		return e.sendDraftSummary(ctx, userID)
 	case "report:send":
 		return e.finishDraft(ctx, userID)
 	case "report:cancel":
 		e.resetSession(userID)
+		reset := e.session(userID)
+		if err := e.persistStateOrReply(ctx, userID, reset, true); err != nil {
+			return err
+		}
 		return e.sendText(ctx, userID, "Отправка черновика отменена.", backToMenuKeyboard())
 	default:
 		return e.sendText(ctx, userID, "Неизвестная кнопка. Возвращаю в меню.", backToMenuKeyboard())
@@ -250,10 +307,13 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 
 	logIncomingMessage(userID, text, attachments)
 	session := e.session(userID)
+	if err := e.ensureSessionLoaded(ctx, userID, session); err != nil {
+		return e.sendText(ctx, userID, "Не удалось восстановить ваше состояние. Попробуйте ещё раз немного позже.", backToMenuKeyboard())
+	}
 	e.appendTrace(userID, report.DialogStep{
 		At:              time.Now().UTC(),
 		Kind:            "message",
-		State:           session.State,
+		State:           string(session.State),
 		Text:            text,
 		AttachmentTypes: attachmentTypes(attachments),
 	})
@@ -280,6 +340,10 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 			slog.Error("не удалось загрузить карточку обращения", "user_id", userID, "report_id", selected.ID, "error", err.Error())
 			return e.sendText(ctx, userID, "Не удалось загрузить подробную информацию по обращению. Попробуйте ещё раз.", myReportsKeyboard())
 		}
+		applyState(session, stateMyReportDetail)
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
 		return e.sendText(ctx, userID, myReportDetailMessage(detail), myReportsKeyboard())
 	case stateReportCategory:
 		categories, err := e.loadCategories(ctx)
@@ -293,7 +357,10 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		selected := categories[index-1]
 		session.Draft.CategoryID = selected.ID
 		session.Draft.CategoryName = selected.Name
-		session.State = stateReportMunicipal
+		applyState(session, stateReportMunicipal)
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
 		municipalities, err := e.loadMunicipalities(ctx)
 		if err != nil {
 			return e.sendReferenceLookupError(ctx, userID)
@@ -311,7 +378,10 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		selected := municipalities[index-1]
 		session.Draft.MunicipalityID = selected.ID
 		session.Draft.MunicipalityName = selected.Name
-		session.State = stateReportPhone
+		applyState(session, stateReportPhone)
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
 		return e.sendText(ctx, userID, "Введите номер телефона начиная с 8/7 или отправьте контакт по кнопке ниже.", phoneKeyboard())
 	case stateReportPhone:
 		phone := parsePhone(text, attachments)
@@ -319,14 +389,20 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 			return e.sendText(ctx, userID, "Номер не соответствует формату. Введите 11 цифр, начиная с 8 или 7.", phoneKeyboard())
 		}
 		session.Draft.Phone = phone
-		session.State = stateReportAddress
+		applyState(session, stateReportAddress)
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
 		return e.sendText(ctx, userID, "Введите адрес или место совершения правонарушения.", backToMenuKeyboard())
 	case stateReportAddress:
 		if len(text) == 0 || len([]rune(text)) > 1000 {
 			return e.sendText(ctx, userID, "Адрес должен быть от 1 до 1000 символов.", backToMenuKeyboard())
 		}
 		session.Draft.Address = text
-		session.State = stateReportTime
+		applyState(session, stateReportTime)
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
 		return e.sendText(ctx, userID, "Введите дату и время нарушения по формату день/месяц/год часы:минуты.", backToMenuKeyboard())
 	case stateReportTime:
 		incidentTime, ok := parseIncidentTime(text)
@@ -334,14 +410,20 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 			return e.sendText(ctx, userID, "Дата и время должны быть в формате дд/мм/гг чч:мм. Пример: 31/03/26 14:45.", backToMenuKeyboard())
 		}
 		session.Draft.IncidentTime = incidentTime
-		session.State = stateReportDesc
+		applyState(session, stateReportDesc)
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
 		return e.sendText(ctx, userID, "Опишите суть правонарушения. Максимум 3900 символов.", backToMenuKeyboard())
 	case stateReportDesc:
 		if len(text) == 0 || len([]rune(text)) > 3900 {
 			return e.sendText(ctx, userID, "Описание должно быть от 1 до 3900 символов.", backToMenuKeyboard())
 		}
 		session.Draft.Description = text
-		session.State = stateReportMedia
+		applyState(session, stateReportMedia)
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
 		return e.sendText(ctx, userID, "Отправьте фото/видео или нажмите \"Пропустить\".", mediaKeyboard())
 	case stateReportMedia:
 		if len(attachments) == 0 {
@@ -355,14 +437,20 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 			return e.sendText(ctx, userID, "Поддерживаются только фото, видео, контакт и геолокация для теста. Попробуйте ещё раз или пропустите шаг.", mediaKeyboard())
 		}
 		session.Draft.AttachmentLog = append(session.Draft.AttachmentLog, logs...)
-		session.State = stateReportExtra
+		applyState(session, stateReportExtra)
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
 		return e.sendText(ctx, userID, "Вложения получены. Напишите дополнительную информацию или нажмите \"Пропустить\".", extraInfoKeyboard())
 	case stateReportExtra:
 		if len([]rune(text)) > 3900 {
 			return e.sendText(ctx, userID, "Дополнительная информация должна быть не длиннее 3900 символов.", extraInfoKeyboard())
 		}
 		session.Draft.ExtraInfo = text
-		session.State = stateReportConfirm
+		applyState(session, stateReportConfirm)
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
 		return e.sendDraftSummary(ctx, userID)
 	default:
 		return e.showMainMenu(ctx, userID)
@@ -371,18 +459,30 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 
 func (e *Engine) showMainMenu(ctx context.Context, userID int64) error {
 	e.resetSession(userID)
+	session := e.session(userID)
+	if err := e.persistStateOrReply(ctx, userID, session, true); err != nil {
+		return err
+	}
 	text, attachments := mainMenuMessage()
 	return e.reply(ctx, userID, text, attachments)
 }
 
 func (e *Engine) showWelcome(ctx context.Context, userID int64) error {
 	e.resetSession(userID)
+	session := e.session(userID)
+	if err := e.persistStateOrReply(ctx, userID, session, true); err != nil {
+		return err
+	}
 	text, attachments := welcomeMessage()
 	return e.reply(ctx, userID, text, attachments)
 }
 
 func (e *Engine) showAbout(ctx context.Context, userID int64) error {
 	e.resetSession(userID)
+	session := e.session(userID)
+	if err := e.persistStateOrReply(ctx, userID, session, true); err != nil {
+		return err
+	}
 	text, attachments := aboutMessage()
 	return e.reply(ctx, userID, text, attachments)
 }
@@ -413,6 +513,10 @@ func (e *Engine) finishDraft(ctx context.Context, userID int64) error {
 
 	slog.Info("черновик принят", "user_id", userID, "report_number", created.ReportNumber, "dedup_key", payload.DedupKey)
 	e.resetSession(userID)
+	reset := e.session(userID)
+	if err := e.persistStateOrReply(ctx, userID, reset, true); err != nil {
+		return err
+	}
 	return e.sendText(ctx, userID, "Сообщение принято с номером "+created.ReportNumber+".\n\nТекущий статус: "+humanizeReportStatus(created.Status)+".", backToMenuKeyboard())
 }
 
@@ -461,16 +565,112 @@ func (e *Engine) sendReferenceLookupError(ctx context.Context, userID int64) err
 	return e.sendText(ctx, userID, "Не удалось загрузить справочники. Попробуйте ещё раз немного позже.", backToMenuKeyboard())
 }
 
+func (e *Engine) ensureSessionLoaded(ctx context.Context, userID int64, session *Session) error {
+	if session.Loaded {
+		return nil
+	}
+
+	conversation, err := e.conversations.GetConversation(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	if conversation != nil {
+		applyState(session, stateFromConversation(conversation.Stage, draftStage(conversation)))
+		if conversation.ActiveDraft != nil {
+			session.Draft.CategoryID = conversation.ActiveDraft.CategoryID
+			session.Draft.MunicipalityID = conversation.ActiveDraft.MunicipalityID
+			session.Draft.Phone = conversation.ActiveDraft.Phone
+			session.Draft.Address = conversation.ActiveDraft.Address
+			session.Draft.IncidentTime = conversation.ActiveDraft.IncidentTime
+			session.Draft.Description = conversation.ActiveDraft.Description
+			session.Draft.ExtraInfo = conversation.ActiveDraft.AdditionalInfo
+		}
+		if err := e.hydrateDraftNames(ctx, session); err != nil {
+			slog.Warn("не удалось восстановить названия справочников для черновика", "user_id", userID, "error", err.Error())
+		}
+	}
+
+	session.Loaded = true
+	return nil
+}
+
+func draftStage(conversation *reporting.ConversationState) reporting.MessageStage {
+	if conversation == nil || conversation.ActiveDraft == nil {
+		return reporting.MessageStageUnset
+	}
+	return conversation.ActiveDraft.Stage
+}
+
+func (e *Engine) hydrateDraftNames(ctx context.Context, session *Session) error {
+	if session.Draft.CategoryID > 0 && session.Draft.CategoryName == "" {
+		categories, err := e.loadCategories(ctx)
+		if err != nil {
+			return err
+		}
+		for _, item := range categories {
+			if item.ID == session.Draft.CategoryID {
+				session.Draft.CategoryName = item.Name
+				break
+			}
+		}
+	}
+	if session.Draft.MunicipalityID > 0 && session.Draft.MunicipalityName == "" {
+		municipalities, err := e.loadMunicipalities(ctx)
+		if err != nil {
+			return err
+		}
+		for _, item := range municipalities {
+			if item.ID == session.Draft.MunicipalityID {
+				session.Draft.MunicipalityName = item.Name
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func (e *Engine) persistSession(ctx context.Context, userID int64, session *Session, deleteDraft bool) error {
+	req := reporting.SaveConversationRequest{
+		MaxUserID:   userID,
+		UserStage:   session.UserStage,
+		DeleteDraft: deleteDraft,
+	}
+	if !deleteDraft && session.MessageStage != reporting.MessageStageUnset {
+		req.ActiveDraft = &reporting.DraftMessage{
+			Stage:          session.MessageStage,
+			CategoryID:     session.Draft.CategoryID,
+			MunicipalityID: session.Draft.MunicipalityID,
+			Phone:          session.Draft.Phone,
+			Address:        session.Draft.Address,
+			IncidentTime:   session.Draft.IncidentTime,
+			Description:    session.Draft.Description,
+			AdditionalInfo: session.Draft.ExtraInfo,
+		}
+	}
+	_, err := e.conversations.SaveConversation(ctx, req)
+	if err == nil {
+		session.Loaded = true
+	}
+	return err
+}
+
+func (e *Engine) persistStateOrReply(ctx context.Context, userID int64, session *Session, deleteDraft bool) error {
+	if err := e.persistSession(ctx, userID, session, deleteDraft); err != nil {
+		slog.Error("не удалось сохранить состояние пользователя", "user_id", userID, "state", session.State, "error", err.Error())
+		return e.sendText(ctx, userID, "Не удалось сохранить состояние диалога. Попробуйте ещё раз немного позже.", backToMenuKeyboard())
+	}
+	return nil
+}
+
 func (e *Engine) session(userID int64) *Session {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	s, ok := e.sessions[userID]
 	if !ok {
-		s = &Session{
-			State:     stateMainMenu,
-			StartedAt: time.Now().UTC(),
-		}
+		s = &Session{StartedAt: time.Now().UTC()}
+		applyState(s, stateMainMenu)
 		e.sessions[userID] = s
 	}
 	return s
@@ -479,13 +679,12 @@ func (e *Engine) session(userID int64) *Session {
 func (e *Engine) resetSession(userID int64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.sessions[userID] = &Session{
-		State:     stateMainMenu,
-		StartedAt: time.Now().UTC(),
-	}
+	session := &Session{StartedAt: time.Now().UTC()}
+	applyState(session, stateMainMenu)
+	e.sessions[userID] = session
 }
 
-func (e *Engine) setState(userID int64, state string) {
+func (e *Engine) setState(userID int64, state BotState) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	s, ok := e.sessions[userID]
@@ -493,7 +692,7 @@ func (e *Engine) setState(userID int64, state string) {
 		s = &Session{StartedAt: time.Now().UTC()}
 		e.sessions[userID] = s
 	}
-	s.State = state
+	applyState(s, state)
 }
 
 func (e *Engine) appendTrace(userID int64, step report.DialogStep) {
@@ -502,10 +701,8 @@ func (e *Engine) appendTrace(userID int64, step report.DialogStep) {
 
 	s, ok := e.sessions[userID]
 	if !ok {
-		s = &Session{
-			State:     stateMainMenu,
-			StartedAt: time.Now().UTC(),
-		}
+		s = &Session{StartedAt: time.Now().UTC()}
+		applyState(s, stateMainMenu)
 		e.sessions[userID] = s
 	}
 	s.Trace = append(s.Trace, step)
