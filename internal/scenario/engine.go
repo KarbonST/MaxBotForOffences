@@ -292,7 +292,7 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 		}
 		return e.sendText(ctx, userID, "Отправка черновика отменена.", backToMenuKeyboard())
 	default:
-		return e.sendText(ctx, userID, "Неизвестная кнопка. Возвращаю в меню.", backToMenuKeyboard())
+		return e.showUnsupportedInput(ctx, userID)
 	}
 }
 
@@ -453,7 +453,7 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		}
 		return e.sendDraftSummary(ctx, userID)
 	default:
-		return e.showMainMenu(ctx, userID)
+		return e.showUnsupportedInput(ctx, userID)
 	}
 }
 
@@ -470,21 +470,45 @@ func (e *Engine) showMainMenu(ctx context.Context, userID int64) error {
 func (e *Engine) showWelcome(ctx context.Context, userID int64) error {
 	e.resetSession(userID)
 	session := e.session(userID)
+	e.setState(userID, stateAbout)
+	session = e.session(userID)
 	if err := e.persistStateOrReply(ctx, userID, session, true); err != nil {
 		return err
 	}
 	text, attachments := welcomeMessage()
-	return e.reply(ctx, userID, text, attachments)
+	if err := e.reply(ctx, userID, text, attachments); err != nil {
+		return err
+	}
+	return e.showMainMenu(ctx, userID)
 }
 
 func (e *Engine) showAbout(ctx context.Context, userID int64) error {
 	e.resetSession(userID)
 	session := e.session(userID)
+	e.setState(userID, stateAbout)
+	session = e.session(userID)
 	if err := e.persistStateOrReply(ctx, userID, session, true); err != nil {
 		return err
 	}
 	text, attachments := aboutMessage()
-	return e.reply(ctx, userID, text, attachments)
+	if err := e.reply(ctx, userID, text, attachments); err != nil {
+		return err
+	}
+	return e.showMainMenu(ctx, userID)
+}
+
+func (e *Engine) showUnsupportedInput(ctx context.Context, userID int64) error {
+	e.resetSession(userID)
+	e.setState(userID, stateUnsupportedInput)
+	session := e.session(userID)
+	if err := e.persistStateOrReply(ctx, userID, session, true); err != nil {
+		return err
+	}
+	text, attachments := unsupportedInputMessage()
+	if err := e.reply(ctx, userID, text, attachments); err != nil {
+		return err
+	}
+	return e.showMainMenu(ctx, userID)
 }
 
 func (e *Engine) finishDraft(ctx context.Context, userID int64) error {

@@ -84,6 +84,16 @@ func (m *senderMock) lastText() string {
 	return m.messages[len(m.messages)-1].Text
 }
 
+func (m *senderMock) messageTexts() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]string, 0, len(m.messages))
+	for _, message := range m.messages {
+		result = append(result, message.Text)
+	}
+	return result
+}
+
 func (m *reportSinkMock) Store(_ context.Context, payload report.DialogPayload) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -250,8 +260,15 @@ func TestFlowFallbackToMenuForUnknownState(t *testing.T) {
 	if session.State != stateMainMenu {
 		t.Fatalf("expected state %q, got %q", stateMainMenu, session.State)
 	}
-	if !strings.Contains(mock.lastText(), "Главное меню") {
-		t.Fatalf("expected main menu response, got %q", mock.lastText())
+	texts := mock.messageTexts()
+	if len(texts) != 2 {
+		t.Fatalf("expected 2 messages, got %d: %#v", len(texts), texts)
+	}
+	if !strings.Contains(texts[0], "Не могу распознать вашу команду") {
+		t.Fatalf("expected unsupported input response first, got %q", texts[0])
+	}
+	if !strings.Contains(texts[1], "Главное меню") {
+		t.Fatalf("expected main menu response second, got %q", texts[1])
 	}
 }
 
@@ -270,11 +287,15 @@ func TestBotStartedShowsWelcomeMessage(t *testing.T) {
 		t.Fatalf("HandleUpdate() error = %v", err)
 	}
 
-	if !strings.Contains(mock.lastText(), "Данный бот создан для оперативного сбора информации") {
-		t.Fatalf("expected welcome text, got %q", mock.lastText())
+	texts := mock.messageTexts()
+	if len(texts) != 2 {
+		t.Fatalf("expected 2 messages, got %d: %#v", len(texts), texts)
 	}
-	if strings.Contains(mock.lastText(), "Главное меню") {
-		t.Fatalf("did not expect plain main menu text on bot_started, got %q", mock.lastText())
+	if !strings.Contains(texts[0], "Данный бот создан для оперативного сбора информации") {
+		t.Fatalf("expected welcome text first, got %q", texts[0])
+	}
+	if !strings.Contains(texts[1], "Главное меню") {
+		t.Fatalf("expected main menu text second, got %q", texts[1])
 	}
 }
 
@@ -287,11 +308,15 @@ func TestStartCommandShowsWelcomeMessage(t *testing.T) {
 		t.Fatalf("HandleUpdate() error = %v", err)
 	}
 
-	if !strings.Contains(mock.lastText(), "Данный бот создан для оперативного сбора информации") {
-		t.Fatalf("expected welcome text on /start, got %q", mock.lastText())
+	texts := mock.messageTexts()
+	if len(texts) != 2 {
+		t.Fatalf("expected 2 messages, got %d: %#v", len(texts), texts)
 	}
-	if strings.Contains(mock.lastText(), "Главное меню") {
-		t.Fatalf("did not expect plain main menu text on /start, got %q", mock.lastText())
+	if !strings.Contains(texts[0], "Данный бот создан для оперативного сбора информации") {
+		t.Fatalf("expected welcome text first on /start, got %q", texts[0])
+	}
+	if !strings.Contains(texts[1], "Главное меню") {
+		t.Fatalf("expected main menu text second on /start, got %q", texts[1])
 	}
 }
 
@@ -306,8 +331,15 @@ func TestAboutReturnsUserToMainMenuState(t *testing.T) {
 		t.Fatalf("HandleUpdate() error = %v", err)
 	}
 
-	if !strings.Contains(mock.lastText(), "Данный бот создан для оперативного сбора информации") {
-		t.Fatalf("expected about text, got %q", mock.lastText())
+	texts := mock.messageTexts()
+	if len(texts) != 2 {
+		t.Fatalf("expected 2 messages, got %d: %#v", len(texts), texts)
+	}
+	if !strings.Contains(texts[0], "Данный бот создан для оперативного сбора информации") {
+		t.Fatalf("expected about text first, got %q", texts[0])
+	}
+	if !strings.Contains(texts[1], "Главное меню") {
+		t.Fatalf("expected main menu text second, got %q", texts[1])
 	}
 
 	session := engine.session(userID)
