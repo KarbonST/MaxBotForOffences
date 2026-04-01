@@ -16,10 +16,11 @@ func mainMenuMessage() (string, []maxapi.AttachmentRequest) {
 	text := strings.Join([]string{
 		"Главное меню.",
 		"Выберите действие:",
-		"1. Посмотреть список нарушений.",
+		"1. Список нарушений.",
 		"2. Сообщить о нарушении.",
-		"3. Открыть юридическую информацию.",
-		"4. Посмотреть, как работают кнопки и сценарии.",
+		"3. Юридическая информация.",
+		"4. Мои сообщения.",
+		"5. О боте.",
 	}, "\n")
 
 	return text, mainMenuKeyboard()
@@ -73,8 +74,8 @@ func violationsMessage(items []reference.Item) (string, []maxapi.AttachmentReque
 	}
 	return strings.Join(lines, "\n"), []maxapi.AttachmentRequest{
 		inlineKeyboard(
+			row(cb("Вернуться в начало", "menu:main")),
 			row(cb("Сообщить о нарушении", "menu:report")),
-			row(cb("Вернуться в меню", "menu:main")),
 		),
 	}
 }
@@ -149,11 +150,11 @@ func backToMenuKeyboard() []maxapi.AttachmentRequest {
 func mainMenuKeyboard() []maxapi.AttachmentRequest {
 	return []maxapi.AttachmentRequest{
 		inlineKeyboard(
-			row(cb("О боте", "menu:about")),
-			row(cb("Юридическая информация", "menu:legal")),
 			row(cb("Список нарушений", "menu:violations")),
 			row(cb("Сообщить о нарушении", "menu:report")),
+			row(cb("Юридическая информация", "menu:legal")),
 			row(cb("Мои сообщения", "menu:my_reports")),
+			row(cb("О боте", "menu:about")),
 		),
 	}
 }

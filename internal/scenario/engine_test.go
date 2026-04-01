@@ -103,6 +103,18 @@ func (m *senderMock) lastMessage() maxapi.NewMessageBody {
 	return m.messages[len(m.messages)-1]
 }
 
+func inlineKeyboardPayload(t *testing.T, body maxapi.NewMessageBody) maxapi.InlineKeyboardPayload {
+	t.Helper()
+	if len(body.Attachments) != 1 {
+		t.Fatalf("expected one keyboard attachment, got %+v", body.Attachments)
+	}
+	payload, ok := body.Attachments[0].Payload.(maxapi.InlineKeyboardPayload)
+	if !ok {
+		t.Fatalf("expected inline keyboard payload, got %#v", body.Attachments[0].Payload)
+	}
+	return payload
+}
+
 func (m *reportSinkMock) Store(_ context.Context, payload report.DialogPayload) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -373,13 +385,7 @@ func TestLegalInfoMatchesSpecTextAndButtons(t *testing.T) {
 	if !strings.Contains(last.Text, "Федеральный закон от 27.07.2006 № 152-ФЗ") {
 		t.Fatalf("expected detailed legal text, got %q", last.Text)
 	}
-	if len(last.Attachments) != 1 {
-		t.Fatalf("expected one keyboard attachment, got %+v", last.Attachments)
-	}
-	payload, ok := last.Attachments[0].Payload.(maxapi.InlineKeyboardPayload)
-	if !ok {
-		t.Fatalf("expected inline keyboard payload, got %#v", last.Attachments[0].Payload)
-	}
+	payload := inlineKeyboardPayload(t, last)
 	if len(payload.Buttons) != 2 {
 		t.Fatalf("expected 2 rows, got %+v", payload.Buttons)
 	}
@@ -388,6 +394,126 @@ func TestLegalInfoMatchesSpecTextAndButtons(t *testing.T) {
 	}
 	if payload.Buttons[1][0].Text != "Сообщить о нарушении" || payload.Buttons[1][0].Payload != "menu:report" {
 		t.Fatalf("unexpected second button: %+v", payload.Buttons[1][0])
+	}
+}
+
+func TestMainMenuMatchesSpecButtons(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{})
+	userID := int64(1035)
+
+	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "меню")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	last := mock.lastMessage()
+	if !strings.Contains(last.Text, "1. Список нарушений.") {
+		t.Fatalf("expected main menu text to list violations first, got %q", last.Text)
+	}
+	if !strings.Contains(last.Text, "5. О боте.") {
+		t.Fatalf("expected main menu text to include about bot item, got %q", last.Text)
+	}
+	payload := inlineKeyboardPayload(t, last)
+	if len(payload.Buttons) != 5 {
+		t.Fatalf("expected 5 rows, got %+v", payload.Buttons)
+	}
+	expected := []struct {
+		text    string
+		payload string
+	}{
+		{text: "Список нарушений", payload: "menu:violations"},
+		{text: "Сообщить о нарушении", payload: "menu:report"},
+		{text: "Юридическая информация", payload: "menu:legal"},
+		{text: "Мои сообщения", payload: "menu:my_reports"},
+		{text: "О боте", payload: "menu:about"},
+	}
+	for i, row := range payload.Buttons {
+		if len(row) != 1 {
+			t.Fatalf("expected single button in row %d, got %+v", i, row)
+		}
+		if row[0].Text != expected[i].text || row[0].Payload != expected[i].payload {
+			t.Fatalf("unexpected button in row %d: %+v", i, row[0])
+		}
+	}
+}
+
+func TestViolationsListMatchesSpecButtons(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{})
+	userID := int64(1036)
+
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb-violations", "menu:violations")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	last := mock.lastMessage()
+	payload := inlineKeyboardPayload(t, last)
+	if len(payload.Buttons) != 2 {
+		t.Fatalf("expected 2 rows, got %+v", payload.Buttons)
+	}
+	if payload.Buttons[0][0].Text != "Вернуться в начало" || payload.Buttons[0][0].Payload != "menu:main" {
+		t.Fatalf("unexpected first button: %+v", payload.Buttons[0][0])
+	}
+	if payload.Buttons[1][0].Text != "Сообщить о нарушении" || payload.Buttons[1][0].Payload != "menu:report" {
+		t.Fatalf("unexpected second button: %+v", payload.Buttons[1][0])
+	}
+}
+
+func TestButtonOnlyStatesDoNotFallBackToUnsupportedInput(t *testing.T) {
+	testCases := []struct {
+		name                string
+		userID              int64
+		initialUpdate       maxapi.Update
+		expectedState       BotState
+		expectedTextSnippet string
+	}{
+		{
+			name:                "legal info",
+			userID:              1037,
+			initialUpdate:       callbackUpdate(1037, "cb-legal", "menu:legal"),
+			expectedState:       stateLegalInfo,
+			expectedTextSnippet: "В этом разделе используйте кнопки ниже.",
+		},
+		{
+			name:                "violations list",
+			userID:              1038,
+			initialUpdate:       callbackUpdate(1038, "cb-violations", "menu:violations"),
+			expectedState:       stateViolationsList,
+			expectedTextSnippet: "В этом разделе используйте кнопки ниже.",
+		},
+		{
+			name:                "report consent",
+			userID:              1039,
+			initialUpdate:       callbackUpdate(1039, "cb-report", "menu:report"),
+			expectedState:       stateReportConsent,
+			expectedTextSnippet: "Для продолжения используйте кнопки ниже.",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := &senderMock{}
+			engine := New(mock, referenceProviderMock{})
+
+			if err := engine.HandleUpdate(context.Background(), tc.initialUpdate); err != nil {
+				t.Fatalf("HandleUpdate() error = %v", err)
+			}
+			if err := engine.HandleUpdate(context.Background(), textUpdate(tc.userID, "любой текст")); err != nil {
+				t.Fatalf("HandleUpdate() error = %v", err)
+			}
+
+			last := mock.lastMessage()
+			if !strings.Contains(last.Text, tc.expectedTextSnippet) {
+				t.Fatalf("expected helper text %q, got %q", tc.expectedTextSnippet, last.Text)
+			}
+			if strings.Contains(last.Text, "Не могу распознать вашу команду") {
+				t.Fatalf("expected to stay in button-only state, got unsupported text %q", last.Text)
+			}
+			session := engine.session(tc.userID)
+			if session.State != tc.expectedState {
+				t.Fatalf("expected state %q, got %q", tc.expectedState, session.State)
+			}
+		})
 	}
 }
 

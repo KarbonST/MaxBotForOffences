@@ -326,6 +326,19 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 	}
 
 	switch session.State {
+	case stateLegalInfo:
+		text, attachments := legalMessage()
+		return e.sendText(ctx, userID, "В этом разделе используйте кнопки ниже.\n\n"+text, attachments)
+	case stateViolationsList:
+		categories, err := e.loadCategories(ctx)
+		if err != nil {
+			return e.sendReferenceLookupError(ctx, userID)
+		}
+		text, attachments := violationsMessage(categories)
+		return e.sendText(ctx, userID, "В этом разделе используйте кнопки ниже.\n\n"+text, attachments)
+	case stateReportConsent:
+		text, attachments := consentMessage()
+		return e.sendText(ctx, userID, "Для продолжения используйте кнопки ниже.\n\n"+text, attachments)
 	case stateMyReportsList:
 		if len(session.Reports) == 0 {
 			return e.sendText(ctx, userID, "Список обращений устарел. Нажмите \"Обновить список\" или вернитесь в меню.", myReportsKeyboard())
