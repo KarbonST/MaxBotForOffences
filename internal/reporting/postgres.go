@@ -64,8 +64,8 @@ func (s *PostgresStore) CreateReport(ctx context.Context, req CreateReportReques
 
 	var userID int64
 	if err := tx.QueryRowContext(ctx, `
-		INSERT INTO users (max_id, stage)
-		VALUES ($1, 'main_menu')
+		INSERT INTO users (max_id, stage, previous_stage)
+		VALUES ($1, 'main_menu', NULL)
 		ON CONFLICT (max_id) DO UPDATE
 		SET stage = 'main_menu',
 		    updated_at = NOW()
@@ -76,40 +76,82 @@ func (s *PostgresStore) CreateReport(ctx context.Context, req CreateReportReques
 
 	result := &CreatedReport{}
 	var sendedAt sql.NullTime
-	if err := tx.QueryRowContext(ctx, `
-		INSERT INTO messages (
-			user_id,
-			category_id,
-			municipality_id,
-			status,
-			phone,
-			address,
-			incident_time,
-			description,
-			additional_info,
-			stage,
-			sended_at
-		)
-		VALUES ($1, $2, $3, 'moderation', $4, $5, $6, $7, $8, 'sended', NOW())
-		RETURNING id, status::text, stage::text, created_at, sended_at, updated_at
-	`,
-		userID,
-		req.CategoryID,
-		req.MunicipalityID,
-		req.Phone,
-		req.Address,
-		req.IncidentTime,
-		req.Description,
-		nullableString(req.AdditionalInfo),
-	).Scan(
-		&result.ID,
-		&result.Status,
-		&result.Stage,
-		&result.CreatedAt,
-		&sendedAt,
-		&result.UpdatedAt,
-	); err != nil {
-		return nil, fmt.Errorf("insert message: %w", err)
+	draftID, err := findActiveDraftID(ctx, tx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	if draftID > 0 {
+		if err := tx.QueryRowContext(ctx, `
+			UPDATE messages
+			SET category_id = $2,
+			    municipality_id = $3,
+			    status = 'moderation',
+			    phone = $4,
+			    address = $5,
+			    incident_time = $6,
+			    description = $7,
+			    additional_info = $8,
+			    stage = 'sended',
+			    sended_at = NOW(),
+			    updated_at = NOW()
+			WHERE id = $1
+			RETURNING id, status::text, stage::text, created_at, sended_at, updated_at
+		`,
+			draftID,
+			req.CategoryID,
+			req.MunicipalityID,
+			req.Phone,
+			req.Address,
+			req.IncidentTime,
+			req.Description,
+			nullableString(req.AdditionalInfo),
+		).Scan(
+			&result.ID,
+			&result.Status,
+			&result.Stage,
+			&result.CreatedAt,
+			&sendedAt,
+			&result.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("update draft message: %w", err)
+		}
+	} else {
+		if err := tx.QueryRowContext(ctx, `
+			INSERT INTO messages (
+				user_id,
+				category_id,
+				municipality_id,
+				status,
+				phone,
+				address,
+				incident_time,
+				description,
+				additional_info,
+				stage,
+				sended_at
+			)
+			VALUES ($1, $2, $3, 'moderation', $4, $5, $6, $7, $8, 'sended', NOW())
+			RETURNING id, status::text, stage::text, created_at, sended_at, updated_at
+		`,
+			userID,
+			req.CategoryID,
+			req.MunicipalityID,
+			req.Phone,
+			req.Address,
+			req.IncidentTime,
+			req.Description,
+			nullableString(req.AdditionalInfo),
+		).Scan(
+			&result.ID,
+			&result.Status,
+			&result.Stage,
+			&result.CreatedAt,
+			&sendedAt,
+			&result.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("insert message: %w", err)
+		}
 	}
 	if sendedAt.Valid {
 		value := sendedAt.Time
@@ -147,6 +189,127 @@ func (s *PostgresStore) CreateReport(ctx context.Context, req CreateReportReques
 	}
 
 	return result, nil
+}
+
+func (s *PostgresStore) GetConversation(ctx context.Context, maxUserID int64) (*ConversationState, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, max_id, stage::text, COALESCE(previous_stage::text, '')
+		FROM users
+		WHERE max_id = $1
+	`, maxUserID)
+
+	var state ConversationState
+	if err := row.Scan(&state.UserID, &state.MaxUserID, &state.Stage, &state.PreviousStage); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return &ConversationState{
+				MaxUserID: maxUserID,
+				Stage:     UserStageMainMenu,
+			}, nil
+		}
+		return nil, fmt.Errorf("select conversation user: %w", err)
+	}
+
+	draft, err := loadActiveDraft(ctx, s.db, state.UserID)
+	if err != nil {
+		return nil, err
+	}
+	state.ActiveDraft = draft
+	return &state, nil
+}
+
+func (s *PostgresStore) SaveConversation(ctx context.Context, req SaveConversationRequest) (*ConversationState, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	userID, err := upsertConversationUser(ctx, tx, req.MaxUserID, req.UserStage, req.PreviousStage)
+	if err != nil {
+		return nil, err
+	}
+
+	if req.DeleteDraft {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM messages
+			WHERE user_id = $1 AND status = 'draft'
+		`, userID); err != nil {
+			return nil, fmt.Errorf("delete draft message: %w", err)
+		}
+	} else if req.ActiveDraft != nil {
+		draftID, err := findActiveDraftID(ctx, tx, userID)
+		if err != nil {
+			return nil, err
+		}
+		if draftID > 0 {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE messages
+				SET category_id = $2,
+				    municipality_id = $3,
+				    phone = $4,
+				    address = $5,
+				    incident_time = $6,
+				    description = $7,
+				    additional_info = $8,
+				    stage = $9,
+				    updated_at = NOW()
+				WHERE id = $1
+			`,
+				draftID,
+				nullableInt(req.ActiveDraft.CategoryID),
+				nullableInt(req.ActiveDraft.MunicipalityID),
+				nullableString(req.ActiveDraft.Phone),
+				nullableString(req.ActiveDraft.Address),
+				nullableString(req.ActiveDraft.IncidentTime),
+				nullableString(req.ActiveDraft.Description),
+				nullableString(req.ActiveDraft.AdditionalInfo),
+				req.ActiveDraft.Stage,
+			); err != nil {
+				return nil, fmt.Errorf("update draft message: %w", err)
+			}
+		} else {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO messages (
+					user_id,
+					category_id,
+					municipality_id,
+					status,
+					phone,
+					address,
+					incident_time,
+					description,
+					additional_info,
+					stage
+				)
+				VALUES ($1, $2, $3, 'draft', $4, $5, $6, $7, $8, $9)
+			`,
+				userID,
+				nullableInt(req.ActiveDraft.CategoryID),
+				nullableInt(req.ActiveDraft.MunicipalityID),
+				nullableString(req.ActiveDraft.Phone),
+				nullableString(req.ActiveDraft.Address),
+				nullableString(req.ActiveDraft.IncidentTime),
+				nullableString(req.ActiveDraft.Description),
+				nullableString(req.ActiveDraft.AdditionalInfo),
+				req.ActiveDraft.Stage,
+			); err != nil {
+				return nil, fmt.Errorf("insert draft message: %w", err)
+			}
+		}
+	}
+
+	state, err := loadConversationTx(ctx, tx, req.MaxUserID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit tx: %w", err)
+	}
+
+	return state, nil
 }
 
 func (s *PostgresStore) ListReportsByMaxUserID(ctx context.Context, maxUserID int64) ([]ReportSummary, error) {
@@ -380,6 +543,120 @@ func (s *PostgresStore) findCreatedReportByDialogKey(ctx context.Context, tx *sq
 		result.SendedAt = &value
 	}
 	return &result, nil
+}
+
+func upsertConversationUser(ctx context.Context, tx *sql.Tx, maxUserID int64, stage UserStage, previousStage UserStage) (int64, error) {
+	var userID int64
+	if err := tx.QueryRowContext(ctx, `
+		INSERT INTO users (max_id, stage, previous_stage)
+		VALUES ($1, $2, NULLIF($3, '')::user_stage)
+		ON CONFLICT (max_id) DO UPDATE
+		SET stage = EXCLUDED.stage,
+		    previous_stage = EXCLUDED.previous_stage,
+		    updated_at = NOW()
+		RETURNING id
+	`, maxUserID, stage, previousStage).Scan(&userID); err != nil {
+		return 0, fmt.Errorf("upsert user stage: %w", err)
+	}
+	return userID, nil
+}
+
+func findActiveDraftID(ctx context.Context, tx *sql.Tx, userID int64) (int64, error) {
+	var draftID sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT id
+		FROM messages
+		WHERE user_id = $1 AND status = 'draft'
+		ORDER BY updated_at DESC, id DESC
+		LIMIT 1
+		FOR UPDATE
+	`, userID).Scan(&draftID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("select active draft: %w", err)
+	}
+	if !draftID.Valid {
+		return 0, nil
+	}
+	return draftID.Int64, nil
+}
+
+type rowQuerier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func loadActiveDraft(ctx context.Context, q rowQuerier, userID int64) (*DraftMessage, error) {
+	row := q.QueryRowContext(ctx, `
+		SELECT
+			id,
+			status::text,
+			stage::text,
+			COALESCE(category_id, 0),
+			COALESCE(municipality_id, 0),
+			COALESCE(phone, ''),
+			COALESCE(address, ''),
+			COALESCE(incident_time, ''),
+			COALESCE(description, ''),
+			COALESCE(additional_info, '')
+		FROM messages
+		WHERE user_id = $1 AND status = 'draft'
+		ORDER BY updated_at DESC, id DESC
+		LIMIT 1
+	`, userID)
+
+	var draft DraftMessage
+	if err := row.Scan(
+		&draft.ID,
+		&draft.Status,
+		&draft.Stage,
+		&draft.CategoryID,
+		&draft.MunicipalityID,
+		&draft.Phone,
+		&draft.Address,
+		&draft.IncidentTime,
+		&draft.Description,
+		&draft.AdditionalInfo,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("select active draft: %w", err)
+	}
+	return &draft, nil
+}
+
+func loadConversationTx(ctx context.Context, tx *sql.Tx, maxUserID int64) (*ConversationState, error) {
+	row := tx.QueryRowContext(ctx, `
+		SELECT id, max_id, stage::text, COALESCE(previous_stage::text, '')
+		FROM users
+		WHERE max_id = $1
+	`, maxUserID)
+
+	var state ConversationState
+	if err := row.Scan(&state.UserID, &state.MaxUserID, &state.Stage, &state.PreviousStage); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return &ConversationState{
+				MaxUserID: maxUserID,
+				Stage:     UserStageMainMenu,
+			}, nil
+		}
+		return nil, fmt.Errorf("select conversation state: %w", err)
+	}
+
+	draft, err := loadActiveDraft(ctx, tx, state.UserID)
+	if err != nil {
+		return nil, err
+	}
+	state.ActiveDraft = draft
+	return &state, nil
+}
+
+func nullableInt(value int) any {
+	if value <= 0 {
+		return nil
+	}
+	return value
 }
 
 func nullableString(value string) any {

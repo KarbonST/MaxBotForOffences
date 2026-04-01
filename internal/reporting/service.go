@@ -7,6 +7,8 @@ type Store interface {
 	ListReports(context.Context, ListReportsFilter) ([]ReportSummary, error)
 	ListReportsByMaxUserID(context.Context, int64) ([]ReportSummary, error)
 	GetReportByID(context.Context, int64) (*ReportDetail, error)
+	GetConversation(context.Context, int64) (*ConversationState, error)
+	SaveConversation(context.Context, SaveConversationRequest) (*ConversationState, error)
 }
 
 type Service struct {
@@ -35,4 +37,19 @@ func (s *Service) ListReportsByMaxUserID(ctx context.Context, maxUserID int64) (
 
 func (s *Service) GetReportByID(ctx context.Context, id int64) (*ReportDetail, error) {
 	return s.store.GetReportByID(ctx, id)
+}
+
+func (s *Service) GetConversation(ctx context.Context, maxUserID int64) (*ConversationState, error) {
+	if maxUserID <= 0 {
+		return nil, ErrInvalidRequest
+	}
+	return s.store.GetConversation(ctx, maxUserID)
+}
+
+func (s *Service) SaveConversation(ctx context.Context, req SaveConversationRequest) (*ConversationState, error) {
+	req.Normalize()
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+	return s.store.SaveConversation(ctx, req)
 }

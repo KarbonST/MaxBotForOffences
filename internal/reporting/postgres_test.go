@@ -29,8 +29,8 @@ func TestPostgresStoreCreateReport(t *testing.T) {
 		WithArgs("dlg-1").
 		WillReturnRows(sqlmock.NewRows([]string{"message_id"}))
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		INSERT INTO users (max_id, stage)
-		VALUES ($1, 'main_menu')
+		INSERT INTO users (max_id, stage, previous_stage)
+		VALUES ($1, 'main_menu', NULL)
 		ON CONFLICT (max_id) DO UPDATE
 		SET stage = 'main_menu',
 		    updated_at = NOW()
@@ -38,6 +38,16 @@ func TestPostgresStoreCreateReport(t *testing.T) {
 	`)).
 		WithArgs(int64(777)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(11)))
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id
+		FROM messages
+		WHERE user_id = $1 AND status = 'draft'
+		ORDER BY updated_at DESC, id DESC
+		LIMIT 1
+		FOR UPDATE
+	`)).
+		WithArgs(int64(11)).
+		WillReturnError(sql.ErrNoRows)
 
 	now := time.Now().UTC()
 	mock.ExpectQuery(regexp.QuoteMeta(`
@@ -149,5 +159,103 @@ func TestPostgresStoreGetReportByIDNotFound(t *testing.T) {
 	}
 	if err != ErrNotFound {
 		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestPostgresStoreSaveConversationCreatesDraft(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	store := &PostgresStore{db: db}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		INSERT INTO users (max_id, stage, previous_stage)
+		VALUES ($1, $2, NULLIF($3, '')::user_stage)
+		ON CONFLICT (max_id) DO UPDATE
+		SET stage = EXCLUDED.stage,
+		    previous_stage = EXCLUDED.previous_stage,
+		    updated_at = NOW()
+		RETURNING id
+	`)).
+		WithArgs(int64(777), UserStageFillingReport, UserStage("")).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(11)))
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id
+		FROM messages
+		WHERE user_id = $1 AND status = 'draft'
+		ORDER BY updated_at DESC, id DESC
+		LIMIT 1
+		FOR UPDATE
+	`)).
+		WithArgs(int64(11)).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec(regexp.QuoteMeta(`
+				INSERT INTO messages (
+					user_id,
+					category_id,
+					municipality_id,
+					status,
+					phone,
+					address,
+					incident_time,
+					description,
+					additional_info,
+					stage
+				)
+				VALUES ($1, $2, $3, 'draft', $4, $5, $6, $7, $8, $9)
+			`)).
+		WithArgs(int64(11), 1, nil, nil, nil, nil, nil, nil, MessageStageCategory).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, max_id, stage::text, COALESCE(previous_stage::text, '')
+		FROM users
+		WHERE max_id = $1
+	`)).
+		WithArgs(int64(777)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "max_id", "stage", "previous_stage"}).
+			AddRow(int64(11), int64(777), string(UserStageFillingReport), ""))
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT
+			id,
+			status::text,
+			stage::text,
+			COALESCE(category_id, 0),
+			COALESCE(municipality_id, 0),
+			COALESCE(phone, ''),
+			COALESCE(address, ''),
+			COALESCE(incident_time, ''),
+			COALESCE(description, ''),
+			COALESCE(additional_info, '')
+		FROM messages
+		WHERE user_id = $1 AND status = 'draft'
+		ORDER BY updated_at DESC, id DESC
+		LIMIT 1
+	`)).
+		WithArgs(int64(11)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "status", "stage", "category_id", "municipality_id", "phone", "address", "incident_time", "description", "additional_info"}).
+			AddRow(int64(20), string(MessageStatusDraft), string(MessageStageCategory), 1, 0, "", "", "", "", ""))
+	mock.ExpectCommit()
+
+	state, err := store.SaveConversation(context.Background(), SaveConversationRequest{
+		MaxUserID: 777,
+		UserStage: UserStageFillingReport,
+		ActiveDraft: &DraftMessage{
+			Stage:      MessageStageCategory,
+			CategoryID: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SaveConversation() error = %v", err)
+	}
+	if state.ActiveDraft == nil || state.ActiveDraft.Stage != MessageStageCategory {
+		t.Fatalf("unexpected state: %+v", state)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }

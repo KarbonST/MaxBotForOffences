@@ -79,6 +79,49 @@ func NewHandler(service *Service, refs reference.Provider, logger *slog.Logger) 
 		}
 		writeJSON(w, http.StatusOK, item)
 	})
+	mux.HandleFunc("/api/conversations/", func(w http.ResponseWriter, r *http.Request) {
+		raw := strings.TrimPrefix(r.URL.Path, "/api/conversations/")
+		maxUserID, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || maxUserID <= 0 {
+			http.Error(w, "invalid max user id", http.StatusBadRequest)
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			item, err := service.GetConversation(r.Context(), maxUserID)
+			if err != nil {
+				if errors.Is(err, ErrInvalidRequest) {
+					http.Error(w, "invalid max user id", http.StatusBadRequest)
+					return
+				}
+				logger.Error("get conversation failed", "max_user_id", maxUserID, "error", err.Error())
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+				return
+			}
+			writeJSON(w, http.StatusOK, item)
+		case http.MethodPut:
+			var req SaveConversationRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			req.MaxUserID = maxUserID
+			item, err := service.SaveConversation(r.Context(), req)
+			if err != nil {
+				if errors.Is(err, ErrInvalidRequest) {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+					return
+				}
+				logger.Error("save conversation failed", "max_user_id", maxUserID, "error", err.Error())
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+				return
+			}
+			writeJSON(w, http.StatusOK, item)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
 
 	return mux
 }

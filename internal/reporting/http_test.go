@@ -16,6 +16,8 @@ type serviceStub struct {
 	listFunc       func(context.Context, ListReportsFilter) ([]ReportSummary, error)
 	listByUserFunc func(context.Context, int64) ([]ReportSummary, error)
 	getFunc        func(context.Context, int64) (*ReportDetail, error)
+	getConversationFunc  func(context.Context, int64) (*ConversationState, error)
+	saveConversationFunc func(context.Context, SaveConversationRequest) (*ConversationState, error)
 }
 
 func (s serviceStub) CreateReport(ctx context.Context, req CreateReportRequest) (*CreatedReport, error) {
@@ -32,6 +34,14 @@ func (s serviceStub) ListReportsByMaxUserID(ctx context.Context, id int64) ([]Re
 
 func (s serviceStub) GetReportByID(ctx context.Context, id int64) (*ReportDetail, error) {
 	return s.getFunc(ctx, id)
+}
+
+func (s serviceStub) GetConversation(ctx context.Context, id int64) (*ConversationState, error) {
+	return s.getConversationFunc(ctx, id)
+}
+
+func (s serviceStub) SaveConversation(ctx context.Context, req SaveConversationRequest) (*ConversationState, error) {
+	return s.saveConversationFunc(ctx, req)
 }
 
 type referenceStub struct{}
@@ -104,6 +114,58 @@ func TestHandlerGetReportByID(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.Code)
 	}
 	if !strings.Contains(resp.Body.String(), `"id":15`) {
+		t.Fatalf("unexpected body: %s", resp.Body.String())
+	}
+}
+
+func TestHandlerGetConversation(t *testing.T) {
+	service := &Service{store: serviceStub{
+		getConversationFunc: func(_ context.Context, id int64) (*ConversationState, error) {
+			return &ConversationState{MaxUserID: id, Stage: UserStageMainMenu}, nil
+		},
+	}}
+	handler := NewHandler(service, referenceStub{}, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/conversations/777", nil)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.Code)
+	}
+	if !strings.Contains(resp.Body.String(), `"max_user_id":777`) {
+		t.Fatalf("unexpected body: %s", resp.Body.String())
+	}
+}
+
+func TestHandlerSaveConversation(t *testing.T) {
+	service := &Service{store: serviceStub{
+		saveConversationFunc: func(_ context.Context, req SaveConversationRequest) (*ConversationState, error) {
+			if req.MaxUserID != 777 {
+				t.Fatalf("unexpected max user id: %+v", req)
+			}
+			if req.UserStage != UserStageFillingReport {
+				t.Fatalf("unexpected user stage: %+v", req)
+			}
+			return &ConversationState{
+				MaxUserID: 777,
+				Stage:     UserStageFillingReport,
+				ActiveDraft: &DraftMessage{
+					Stage: MessageStageCategory,
+				},
+			}, nil
+		},
+	}}
+	handler := NewHandler(service, referenceStub{}, nil)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/conversations/777", strings.NewReader(`{"user_stage":"filling_report","active_draft":{"stage":"category"}}`))
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.Code)
+	}
+	if !strings.Contains(resp.Body.String(), `"stage":"filling_report"`) {
 		t.Fatalf("unexpected body: %s", resp.Body.String())
 	}
 }

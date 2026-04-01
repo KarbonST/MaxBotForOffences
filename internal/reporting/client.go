@@ -61,6 +61,24 @@ func (c *Client) GetReportByID(ctx context.Context, id int64) (*ReportDetail, er
 	return &result, nil
 }
 
+func (c *Client) GetConversation(ctx context.Context, maxUserID int64) (*ConversationState, error) {
+	var result ConversationState
+	path := fmt.Sprintf("/api/conversations/%d", maxUserID)
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *Client) SaveConversation(ctx context.Context, req SaveConversationRequest) (*ConversationState, error) {
+	var result ConversationState
+	path := fmt.Sprintf("/api/conversations/%d", req.MaxUserID)
+	if err := c.doJSON(ctx, http.MethodPut, path, req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 func (c *Client) doJSON(ctx context.Context, method, path string, requestBody any, responseBody any) error {
 	endpoint, err := url.JoinPath(c.baseURL, path)
 	if err != nil {
