@@ -94,6 +94,15 @@ func (m *senderMock) messageTexts() []string {
 	return result
 }
 
+func (m *senderMock) lastMessage() maxapi.NewMessageBody {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.messages) == 0 {
+		return maxapi.NewMessageBody{}
+	}
+	return m.messages[len(m.messages)-1]
+}
+
 func (m *reportSinkMock) Store(_ context.Context, payload report.DialogPayload) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -345,6 +354,40 @@ func TestAboutReturnsUserToMainMenuState(t *testing.T) {
 	session := engine.session(userID)
 	if session.State != stateMainMenu {
 		t.Fatalf("expected state %q after about, got %q", stateMainMenu, session.State)
+	}
+}
+
+func TestLegalInfoMatchesSpecTextAndButtons(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{})
+	userID := int64(1034)
+
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb-legal", "menu:legal")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	last := mock.lastMessage()
+	if !strings.Contains(last.Text, "Продолжая использование бота, вы выражаете согласие") {
+		t.Fatalf("expected legal consent text, got %q", last.Text)
+	}
+	if !strings.Contains(last.Text, "Федеральный закон от 27.07.2006 № 152-ФЗ") {
+		t.Fatalf("expected detailed legal text, got %q", last.Text)
+	}
+	if len(last.Attachments) != 1 {
+		t.Fatalf("expected one keyboard attachment, got %+v", last.Attachments)
+	}
+	payload, ok := last.Attachments[0].Payload.(maxapi.InlineKeyboardPayload)
+	if !ok {
+		t.Fatalf("expected inline keyboard payload, got %#v", last.Attachments[0].Payload)
+	}
+	if len(payload.Buttons) != 2 {
+		t.Fatalf("expected 2 rows, got %+v", payload.Buttons)
+	}
+	if payload.Buttons[0][0].Text != "Вернуться в начало" || payload.Buttons[0][0].Payload != "menu:main" {
+		t.Fatalf("unexpected first button: %+v", payload.Buttons[0][0])
+	}
+	if payload.Buttons[1][0].Text != "Сообщить о нарушении" || payload.Buttons[1][0].Payload != "menu:report" {
+		t.Fatalf("unexpected second button: %+v", payload.Buttons[1][0])
 	}
 }
 
