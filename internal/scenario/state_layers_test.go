@@ -20,6 +20,12 @@ func TestApplyStateLayers(t *testing.T) {
 			wantMessage: reporting.MessageStageUnset,
 		},
 		{
+			name:        "report consent",
+			state:       stateReportConsent,
+			wantUser:    reporting.UserStageMainMenu,
+			wantMessage: reporting.MessageStageUnset,
+		},
+		{
 			name:        "report category",
 			state:       stateReportCategory,
 			wantUser:    reporting.UserStageFillingReport,

@@ -1046,8 +1046,8 @@ func TestParsePhoneFromContactAttachment(t *testing.T) {
 		},
 	})
 
-	if phone != "79616594137" {
-		t.Fatalf("expected phone from contact attachment, got %q", phone)
+	if phone != "9616594137" {
+		t.Fatalf("expected normalized phone from contact attachment, got %q", phone)
 	}
 }
 
@@ -1072,6 +1072,13 @@ func TestFlowPersistsDraftStagesToConversationStore(t *testing.T) {
 
 	if len(conversationMock.saveRequests) == 0 {
 		t.Fatalf("expected saved conversation requests, got none")
+	}
+	first := conversationMock.saveRequests[0]
+	if first.UserStage != reporting.UserStageMainMenu {
+		t.Fatalf("expected consent screen to keep user in main_menu, got %q", first.UserStage)
+	}
+	if first.ActiveDraft != nil {
+		t.Fatalf("expected no draft before consent confirmation, got %+v", first.ActiveDraft)
 	}
 	last := conversationMock.saveRequests[len(conversationMock.saveRequests)-1]
 	if last.UserStage != reporting.UserStageFillingReport {

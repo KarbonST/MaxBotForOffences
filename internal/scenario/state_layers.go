@@ -35,8 +35,7 @@ func deriveUserStage(state BotState) reporting.UserStage {
 		return reporting.UserStageViewingMessages
 	case stateClarificationRequested:
 		return reporting.UserStageWaitingClarification
-	case stateReportConsent,
-		stateReportCategory,
+	case stateReportCategory,
 		stateReportMunicipal,
 		stateReportPhone,
 		stateReportAddress,
