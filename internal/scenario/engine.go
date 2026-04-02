@@ -18,7 +18,7 @@ import (
 	"max_bot/internal/reporting"
 )
 
-var phoneRe = regexp.MustCompile(`^[78]\d{10}$`)
+var phoneRe = regexp.MustCompile(`^9\d{9}$`)
 
 const maxTotalVideoDurationSeconds = 120
 
@@ -391,11 +391,11 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
 			return err
 		}
-		return e.sendText(ctx, userID, "Введите номер телефона начиная с 8/7 или отправьте контакт по кнопке ниже.", phoneKeyboard())
+		return e.sendText(ctx, userID, "Введите номер телефона в формате 10 цифр, начиная с 9, или отправьте контакт по кнопке ниже.", phoneKeyboard())
 	case stateReportPhone:
 		phone := parsePhone(text, attachments)
 		if !phoneRe.MatchString(phone) {
-			return e.sendText(ctx, userID, "Номер не соответствует формату. Введите 11 цифр, начиная с 8 или 7.", phoneKeyboard())
+			return e.sendText(ctx, userID, "Номер не соответствует формату. Введите 10 цифр, начиная с 9.", phoneKeyboard())
 		}
 		session.Draft.Phone = phone
 		applyState(session, stateReportAddress)
@@ -904,6 +904,9 @@ func extractPhoneFromVCF(vcf string) string {
 
 func normalizePhone(value string) string {
 	phone := digitsOnly(value)
+	if len(phone) == 11 && (strings.HasPrefix(phone, "7") || strings.HasPrefix(phone, "8")) {
+		phone = phone[1:]
+	}
 	if !phoneRe.MatchString(phone) {
 		return ""
 	}

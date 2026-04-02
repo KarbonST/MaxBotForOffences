@@ -13,7 +13,7 @@ var (
 	ErrInvalidRequest = errors.New("invalid report request")
 )
 
-var phoneRe = regexp.MustCompile(`^\d{10}$`)
+var phoneRe = regexp.MustCompile(`^9\d{9}$`)
 
 var (
 	allowedUserStages = map[UserStage]struct{}{
@@ -156,7 +156,7 @@ func (r CreateReportRequest) Validate() error {
 		return fmt.Errorf("%w: municipality_id must be positive", ErrInvalidRequest)
 	}
 	if !phoneRe.MatchString(r.Phone) {
-		return fmt.Errorf("%w: phone must contain exactly 10 digits", ErrInvalidRequest)
+		return fmt.Errorf("%w: phone must contain exactly 10 digits and start with 9", ErrInvalidRequest)
 	}
 	if length := len([]rune(r.Address)); length < 1 || length > 1000 {
 		return fmt.Errorf("%w: address length must be between 1 and 1000", ErrInvalidRequest)
@@ -201,7 +201,7 @@ func (r SaveConversationRequest) Validate() error {
 		return fmt.Errorf("%w: municipality_id must be >= 0", ErrInvalidRequest)
 	}
 	if phone := strings.TrimSpace(r.ActiveDraft.Phone); phone != "" && !phoneRe.MatchString(phone) {
-		return fmt.Errorf("%w: phone must contain exactly 10 digits", ErrInvalidRequest)
+		return fmt.Errorf("%w: phone must contain exactly 10 digits and start with 9", ErrInvalidRequest)
 	}
 	if len([]rune(r.ActiveDraft.Address)) > 1000 {
 		return fmt.Errorf("%w: address length must be <= 1000", ErrInvalidRequest)
