@@ -741,6 +741,94 @@ func TestFlowRejectsMediaWhenVideoDurationTooLong(t *testing.T) {
 	}
 }
 
+func TestFlowRejectsContactAttachmentOnMediaStep(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{})
+	userID := int64(108)
+
+	prepareSteps := []maxapi.Update{
+		callbackUpdate(userID, "cb1", "report:consent_yes"),
+		textUpdate(userID, "2"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "89991234567"),
+		textUpdate(userID, "ул. Мира, дом 1"),
+		textUpdate(userID, "31/03/26 14:45"),
+		textUpdate(userID, "Описание нарушения"),
+	}
+
+	for _, step := range prepareSteps {
+		if err := engine.HandleUpdate(context.Background(), step); err != nil {
+			t.Fatalf("HandleUpdate() error = %v", err)
+		}
+	}
+
+	raw, err := json.Marshal(map[string]any{
+		"vcf_info": "BEGIN:VCARD\r\nVERSION:3.0\r\nTEL;TYPE=cell:79616594137\r\nFN:Михаил\r\nEND:VCARD\r\n",
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	if err := engine.HandleUpdate(context.Background(), messageWithAttachmentsUpdate(userID, "", []maxapi.AttachmentBody{
+		{
+			Type:       "contact",
+			RawPayload: raw,
+		},
+	})); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	session := engine.session(userID)
+	if session.State != stateReportMedia {
+		t.Fatalf("expected state %q, got %q", stateReportMedia, session.State)
+	}
+	if !strings.Contains(mock.lastText(), "Поддерживаются только фото и видео.") {
+		t.Fatalf("expected unsupported media type message, got %q", mock.lastText())
+	}
+}
+
+func TestFlowRejectsLocationAttachmentOnMediaStepWithSkipHint(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{})
+	userID := int64(109)
+
+	prepareSteps := []maxapi.Update{
+		callbackUpdate(userID, "cb1", "report:consent_yes"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "89991234567"),
+		textUpdate(userID, "ул. Мира, дом 1"),
+		textUpdate(userID, "31/03/26 14:45"),
+		textUpdate(userID, "Описание нарушения"),
+	}
+
+	for _, step := range prepareSteps {
+		if err := engine.HandleUpdate(context.Background(), step); err != nil {
+			t.Fatalf("HandleUpdate() error = %v", err)
+		}
+	}
+
+	lat := 48.708
+	lon := 44.513
+	if err := engine.HandleUpdate(context.Background(), messageWithAttachmentsUpdate(userID, "", []maxapi.AttachmentBody{
+		{
+			Type:      "location",
+			Latitude:  &lat,
+			Longitude: &lon,
+		},
+	})); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	session := engine.session(userID)
+	if session.State != stateReportMedia {
+		t.Fatalf("expected state %q, got %q", stateReportMedia, session.State)
+	}
+	if !strings.Contains(mock.lastText(), "Поддерживаются только фото и видео. Попробуйте ещё раз или пропустите шаг.") {
+		t.Fatalf("expected unsupported media type message with skip hint, got %q", mock.lastText())
+	}
+}
+
 func TestFlowMyReportsShowsListAndDetails(t *testing.T) {
 	mock := &senderMock{}
 	readerMock := &reportReaderMock{

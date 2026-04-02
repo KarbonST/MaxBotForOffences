@@ -469,9 +469,9 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		logs, ok := attachmentSummary(attachments)
 		if !ok {
 			if allowSkip {
-				return e.sendText(ctx, userID, "Поддерживаются только фото, видео, контакт и геолокация для теста. Попробуйте ещё раз или пропустите шаг.", mediaKeyboard(true))
+				return e.sendText(ctx, userID, "Поддерживаются только фото и видео. Попробуйте ещё раз или пропустите шаг.", mediaKeyboard(true))
 			}
-			return e.sendText(ctx, userID, "Поддерживаются только фото, видео, контакт и геолокация для теста. Попробуйте ещё раз.", mediaKeyboard(false))
+			return e.sendText(ctx, userID, "Поддерживаются только фото и видео. Попробуйте ещё раз.", mediaKeyboard(false))
 		}
 		session.Draft.AttachmentLog = append(session.Draft.AttachmentLog, logs...)
 		applyState(session, stateReportExtra)
@@ -1050,19 +1050,6 @@ func attachmentSummary(items []maxapi.AttachmentBody) ([]string, bool) {
 		switch item.Type {
 		case "photo", "image", "video":
 			result = append(result, "- "+item.Type)
-		case "contact":
-			var payload maxapi.ContactPayload
-			if err := json.Unmarshal(item.RawPayload, &payload); err == nil {
-				result = append(result, "- контакт: "+payload.VCFPhone)
-			} else {
-				result = append(result, "- контакт")
-			}
-		case "location":
-			if item.Latitude != nil && item.Longitude != nil {
-				result = append(result, fmt.Sprintf("- геопозиция: %.6f, %.6f", *item.Latitude, *item.Longitude))
-			} else {
-				result = append(result, "- геопозиция")
-			}
 		default:
 			return nil, false
 		}

@@ -37,8 +37,7 @@ BEGIN
         CREATE TYPE history_event_type AS ENUM (
             'status',
             'category',
-            'municipality',
-            'answer'
+            'municipality'
         );
     END IF;
 
@@ -47,6 +46,14 @@ BEGIN
             'new',
             'answered',
             'rejected'
+        );
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'notification_status') THEN
+        CREATE TYPE notification_status AS ENUM (
+            'new',
+            'sended',
+            'error'
         );
     END IF;
 
@@ -134,6 +141,15 @@ CREATE TABLE IF NOT EXISTS messages (
     )
 );
 
+CREATE TABLE IF NOT EXISTS user_notifications (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    notification TEXT NOT NULL,
+    status notification_status NOT NULL DEFAULT 'new',
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    sended_at TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS messages_history (
     id SERIAL PRIMARY KEY,
     message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -141,6 +157,7 @@ CREATE TABLE IF NOT EXISTS messages_history (
     date TIMESTAMP NOT NULL DEFAULT NOW(),
     event_type history_event_type NOT NULL,
     new_value TEXT NOT NULL,
+    notification_id INTEGER REFERENCES user_notifications(id) ON DELETE SET NULL,
     comments TEXT,
     created_at TIMESTAMP DEFAULT NOW()
 );
@@ -158,8 +175,7 @@ CREATE TABLE IF NOT EXISTS files (
 CREATE TABLE IF NOT EXISTS clarification_requests (
     id SERIAL PRIMARY KEY,
     message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-    admin_id INTEGER REFERENCES admins(id) ON DELETE SET NULL,
-    question TEXT NOT NULL,
+    admin_id INTEGER NOT NULL REFERENCES admins(id) ON DELETE SET NULL,
     answer TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP,
@@ -177,14 +193,20 @@ CREATE INDEX IF NOT EXISTS idx_messages_sended ON messages(sended_at) WHERE send
 
 CREATE INDEX IF NOT EXISTS idx_history_message ON messages_history(message_id);
 CREATE INDEX IF NOT EXISTS idx_history_admin ON messages_history(admin_id);
+CREATE INDEX IF NOT EXISTS idx_history_notification ON messages_history(notification_id);
 
 CREATE INDEX IF NOT EXISTS idx_files_message ON files(message_id);
 
 CREATE INDEX IF NOT EXISTS idx_clarification_message ON clarification_requests(message_id);
 CREATE INDEX IF NOT EXISTS idx_clarification_status ON clarification_requests(status);
 
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON user_notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_status ON user_notifications(status);
+
 CREATE INDEX IF NOT EXISTS idx_categories_sorting ON categories(sorting);
 CREATE INDEX IF NOT EXISTS idx_municipalities_sorting ON municipalities(sorting);
+CREATE INDEX IF NOT EXISTS idx_categories_active ON categories(is_active);
+CREATE INDEX IF NOT EXISTS idx_municipalities_active ON municipalities(is_active);
 
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
@@ -211,3 +233,15 @@ CREATE TRIGGER update_admins_updated_at
     BEFORE UPDATE ON admins
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
+
+CREATE OR REPLACE FUNCTION delete_old_messages() RETURNS void AS $$
+BEGIN
+    DELETE FROM messages
+    WHERE status IN ('moderation', 'rejected', 'resolved')
+      AND sended_at < NOW() - INTERVAL '30 days';
+
+    DELETE FROM messages
+    WHERE status = 'draft'
+      AND created_at < NOW() - INTERVAL '30 days';
+END;
+$$ LANGUAGE plpgsql;

@@ -34,3 +34,19 @@ const (
 	MessageStatusRejected              MessageStatus = "rejected"
 	MessageStatusResolved              MessageStatus = "resolved"
 )
+
+type RequestStatus string
+
+const (
+	RequestStatusNew      RequestStatus = "new"
+	RequestStatusAnswered RequestStatus = "answered"
+	RequestStatusRejected RequestStatus = "rejected"
+)
+
+type NotificationStatus string
+
+const (
+	NotificationStatusNew    NotificationStatus = "new"
+	NotificationStatusSended NotificationStatus = "sended"
+	NotificationStatusError  NotificationStatus = "error"
+)
