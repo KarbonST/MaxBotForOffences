@@ -47,6 +47,7 @@ type Session struct {
 	Trace        []report.DialogStep
 	Reports      []reporting.ReportSummary
 	Loaded       bool
+	HasUserRecord bool
 }
 
 type Draft struct {
@@ -219,6 +220,8 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 		return e.showMainMenu(ctx, userID)
 	case "menu:about":
 		return e.showAbout(ctx, userID)
+	case "reports:back":
+		return e.showMyReportsList(ctx, userID)
 	case "menu:legal":
 		e.setState(userID, stateLegalInfo)
 		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
@@ -245,24 +248,7 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 		text, attachments := consentMessage()
 		return e.reply(ctx, userID, text, attachments)
 	case "menu:my_reports":
-		items, err := e.reportReader.ListReportsByMaxUserID(ctx, userID)
-		if err != nil {
-			slog.Error("не удалось загрузить обращения пользователя", "user_id", userID, "error", err.Error())
-			return e.sendText(ctx, userID, "Не удалось загрузить ваши обращения. Попробуйте ещё раз немного позже.", backToMenuKeyboard())
-		}
-		if len(items) == 0 {
-			e.setState(userID, stateMyReportsList)
-			if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
-				return err
-			}
-			return e.sendText(ctx, userID, "У вас пока нет отправленных обращений.", backToMenuKeyboard())
-		}
-		session.Reports = append([]reporting.ReportSummary(nil), items...)
-		applyState(session, stateMyReportsList)
-		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
-			return err
-		}
-		return e.sendText(ctx, userID, myReportsListMessage(items), myReportsKeyboard())
+		return e.showMyReportsList(ctx, userID)
 	case "report:consent_yes":
 		categories, err := e.loadCategories(ctx)
 		if err != nil {
@@ -316,6 +302,9 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 	if err := e.ensureSessionLoaded(ctx, userID, session); err != nil {
 		return e.sendText(ctx, userID, "Не удалось восстановить ваше состояние. Попробуйте ещё раз немного позже.", backToMenuKeyboard())
 	}
+	if !session.HasUserRecord && text != "/start" {
+		return e.showWelcome(ctx, userID)
+	}
 	e.appendTrace(userID, report.DialogStep{
 		At:              time.Now().UTC(),
 		Kind:            "message",
@@ -347,13 +336,12 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		return e.sendText(ctx, userID, "Для продолжения используйте кнопки ниже.\n\n"+text, attachments)
 	case stateMyReportsList:
 		if len(session.Reports) == 0 {
-			return e.sendText(ctx, userID, "Список обращений устарел. Нажмите \"Обновить список\" или вернитесь в меню.", myReportsKeyboard())
+			return e.sendText(ctx, userID, "Список обращений устарел. Вернитесь в начало и откройте раздел снова.", myReportsKeyboard())
 		}
-		index, ok := parseChoice(text, len(session.Reports))
+		selected, ok := findReportByNumber(text, session.Reports)
 		if !ok {
-			return e.sendText(ctx, userID, "Отправьте номер обращения из списка, чтобы посмотреть подробности.", myReportsKeyboard())
+			return e.sendText(ctx, userID, "Отправьте номер сообщения из списка, чтобы посмотреть подробности.", myReportsKeyboard())
 		}
-		selected := session.Reports[index-1]
 		detail, err := e.reportReader.GetReportByID(ctx, selected.ID)
 		if err != nil {
 			slog.Error("не удалось загрузить карточку обращения", "user_id", userID, "report_id", selected.ID, "error", err.Error())
@@ -363,7 +351,9 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
 			return err
 		}
-		return e.sendText(ctx, userID, myReportDetailMessage(detail), myReportsKeyboard())
+		return e.sendText(ctx, userID, myReportDetailMessage(detail), myReportDetailKeyboard())
+	case stateMyReportDetail:
+		return e.sendText(ctx, userID, "Для навигации используйте кнопки ниже.", myReportDetailKeyboard())
 	case stateReportCategory:
 		categories, err := e.loadCategories(ctx)
 		if err != nil {
@@ -502,6 +492,24 @@ func (e *Engine) showMainMenu(ctx context.Context, userID int64) error {
 	}
 	text, attachments := mainMenuMessage()
 	return e.reply(ctx, userID, text, attachments)
+}
+
+func (e *Engine) showMyReportsList(ctx context.Context, userID int64) error {
+	session := e.session(userID)
+	items, err := e.reportReader.ListReportsByMaxUserID(ctx, userID)
+	if err != nil {
+		slog.Error("не удалось загрузить обращения пользователя", "user_id", userID, "error", err.Error())
+		return e.sendText(ctx, userID, "Не удалось загрузить ваши обращения. Попробуйте ещё раз немного позже.", backToStartKeyboard())
+	}
+	applyState(session, stateMyReportsList)
+	session.Reports = append([]reporting.ReportSummary(nil), items...)
+	if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+		return err
+	}
+	if len(items) == 0 {
+		return e.sendText(ctx, userID, "У вас пока нет отправленных обращений.", backToStartKeyboard())
+	}
+	return e.sendText(ctx, userID, myReportsListMessage(items), myReportsKeyboard())
 }
 
 func (e *Engine) showWelcome(ctx context.Context, userID int64) error {
@@ -650,6 +658,7 @@ func (e *Engine) ensureSessionLoaded(ctx context.Context, userID int64, session 
 		if err := e.hydrateDraftNames(ctx, session); err != nil {
 			slog.Warn("не удалось восстановить названия справочников для черновика", "user_id", userID, "error", err.Error())
 		}
+		session.HasUserRecord = conversation.UserID > 0
 	}
 
 	session.Loaded = true
@@ -709,9 +718,12 @@ func (e *Engine) persistSession(ctx context.Context, userID int64, session *Sess
 			AdditionalInfo: session.Draft.ExtraInfo,
 		}
 	}
-	_, err := e.conversations.SaveConversation(ctx, req)
+	state, err := e.conversations.SaveConversation(ctx, req)
 	if err == nil {
 		session.Loaded = true
+		if state != nil {
+			session.HasUserRecord = state.UserID > 0 || state.MaxUserID == userID
+		}
 	}
 	return err
 }
@@ -821,6 +833,16 @@ func parseChoice(text string, max int) (int, bool) {
 		return 0, false
 	}
 	return n, true
+}
+
+func findReportByNumber(text string, reports []reporting.ReportSummary) (reporting.ReportSummary, bool) {
+	normalized := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text), "№"))
+	for _, item := range reports {
+		if strings.TrimSpace(item.ReportNumber) == normalized {
+			return item, true
+		}
+	}
+	return reporting.ReportSummary{}, false
 }
 
 func parsePhone(text string, attachments []maxapi.AttachmentBody) string {

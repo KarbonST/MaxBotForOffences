@@ -273,7 +273,14 @@ func TestFlowValidationCategoryError(t *testing.T) {
 
 func TestFlowFallbackToMenuForUnknownState(t *testing.T) {
 	mock := &senderMock{}
-	engine := New(mock, referenceProviderMock{})
+	conversations := &conversationStoreMock{
+		state: &reporting.ConversationState{
+			UserID:    1,
+			MaxUserID: 103,
+			Stage:     reporting.UserStageMainMenu,
+		},
+	}
+	engine := New(mock, referenceProviderMock{}, WithConversationStore(conversations))
 	userID := int64(103)
 
 	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "привет")); err != nil {
@@ -298,7 +305,14 @@ func TestFlowFallbackToMenuForUnknownState(t *testing.T) {
 
 func TestUnsupportedInputShowsNoticeAndRedirectsToMenu(t *testing.T) {
 	mock := &senderMock{}
-	engine := New(mock, referenceProviderMock{})
+	conversations := &conversationStoreMock{
+		state: &reporting.ConversationState{
+			UserID:    1,
+			MaxUserID: 1034,
+			Stage:     reporting.UserStageMainMenu,
+		},
+	}
+	engine := New(mock, referenceProviderMock{}, WithConversationStore(conversations))
 	userID := int64(1034)
 
 	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "непредусмотренный ввод")); err != nil {
@@ -314,6 +328,27 @@ func TestUnsupportedInputShowsNoticeAndRedirectsToMenu(t *testing.T) {
 	}
 	if !strings.Contains(texts[len(texts)-1], "Главное меню") {
 		t.Fatalf("expected main menu message after redirect, got %q", texts[len(texts)-1])
+	}
+}
+
+func TestFirstPlainMessageShowsWelcomeAndMainMenu(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{}, WithConversationStore(&conversationStoreMock{}))
+	userID := int64(1040)
+
+	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "привет")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	texts := mock.messageTexts()
+	if len(texts) != 2 {
+		t.Fatalf("expected 2 messages, got %d: %#v", len(texts), texts)
+	}
+	if !strings.Contains(texts[0], "Данный бот создан для оперативного сбора информации") {
+		t.Fatalf("expected welcome text first, got %q", texts[0])
+	}
+	if !strings.Contains(texts[1], "Главное меню") {
+		t.Fatalf("expected main menu text second, got %q", texts[1])
 	}
 }
 
@@ -884,14 +919,27 @@ func TestFlowMyReportsShowsListAndDetails(t *testing.T) {
 	if !strings.Contains(mock.lastText(), "Ваши обращения:") {
 		t.Fatalf("expected reports list text, got %q", mock.lastText())
 	}
-	if !strings.Contains(mock.lastText(), "2. 31.03.2026 16:00") {
-		t.Fatalf("expected second report summary in list, got %q", mock.lastText())
+	if !strings.Contains(mock.lastText(), "№15") {
+		t.Fatalf("expected first report number in list, got %q", mock.lastText())
+	}
+	if !strings.Contains(mock.lastText(), "№16") {
+		t.Fatalf("expected second report number in list, got %q", mock.lastText())
+	}
+	if !strings.Contains(mock.lastText(), "Дата: 31.03.2026 16:00") {
+		t.Fatalf("expected date in list, got %q", mock.lastText())
 	}
 	if !strings.Contains(mock.lastText(), "Статус: В работе") {
 		t.Fatalf("expected status line in list, got %q", mock.lastText())
 	}
+	if !strings.Contains(mock.lastText(), "Отправьте номер сообщения") {
+		t.Fatalf("expected prompt to send real report number, got %q", mock.lastText())
+	}
+	listKeyboard := inlineKeyboardPayload(t, mock.lastMessage())
+	if len(listKeyboard.Buttons) != 1 || listKeyboard.Buttons[0][0].Text != "Вернуться в начало" {
+		t.Fatalf("expected only back-to-start button in list, got %+v", listKeyboard.Buttons)
+	}
 
-	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "2")); err != nil {
+	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "16")); err != nil {
 		t.Fatalf("HandleUpdate() error = %v", err)
 	}
 
@@ -904,8 +952,15 @@ func TestFlowMyReportsShowsListAndDetails(t *testing.T) {
 	if !strings.Contains(mock.lastText(), "Доп. информация: Во дворе кафе") {
 		t.Fatalf("expected additional info in detail, got %q", mock.lastText())
 	}
-	if !strings.Contains(mock.lastText(), "Чтобы открыть другое обращение, отправьте его номер из списка.") {
-		t.Fatalf("expected simplified detail hint, got %q", mock.lastText())
+	detailKeyboard := inlineKeyboardPayload(t, mock.lastMessage())
+	if len(detailKeyboard.Buttons) != 2 {
+		t.Fatalf("expected 2 rows in detail keyboard, got %+v", detailKeyboard.Buttons)
+	}
+	if detailKeyboard.Buttons[0][0].Text != "Вернуться к списку сообщений" || detailKeyboard.Buttons[0][0].Payload != "reports:back" {
+		t.Fatalf("unexpected first detail button: %+v", detailKeyboard.Buttons[0][0])
+	}
+	if detailKeyboard.Buttons[1][0].Text != "Вернуться в начало" || detailKeyboard.Buttons[1][0].Payload != "menu:main" {
+		t.Fatalf("unexpected second detail button: %+v", detailKeyboard.Buttons[1][0])
 	}
 
 	session := engine.session(userID)
@@ -914,6 +969,52 @@ func TestFlowMyReportsShowsListAndDetails(t *testing.T) {
 	}
 	if len(session.Reports) != 2 {
 		t.Fatalf("expected 2 cached reports in session, got %d", len(session.Reports))
+	}
+}
+
+func TestFlowMyReportsDetailBackReturnsToList(t *testing.T) {
+	mock := &senderMock{}
+	readerMock := &reportReaderMock{
+		items: []reporting.ReportSummary{
+			{
+				ID:           15,
+				ReportNumber: "15",
+				MaxUserID:    779,
+				Status:       "moderation",
+				CreatedAt:    time.Date(2026, time.March, 31, 12, 0, 0, 0, time.UTC),
+			},
+		},
+		details: map[int64]*reporting.ReportDetail{
+			15: {
+				ReportSummary: reporting.ReportSummary{
+					ID:           15,
+					ReportNumber: "15",
+					MaxUserID:    779,
+					Status:       "moderation",
+					CreatedAt:    time.Date(2026, time.March, 31, 12, 0, 0, 0, time.UTC),
+				},
+			},
+		},
+	}
+	engine := New(mock, referenceProviderMock{}, WithReportReader(readerMock))
+	userID := int64(779)
+
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb1", "menu:my_reports")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "15")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb2", "reports:back")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	if !strings.Contains(mock.lastText(), "Ваши обращения:") {
+		t.Fatalf("expected reports list after back callback, got %q", mock.lastText())
+	}
+	session := engine.session(userID)
+	if session.State != stateMyReportsList {
+		t.Fatalf("expected state %q after returning to list, got %q", stateMyReportsList, session.State)
 	}
 }
 

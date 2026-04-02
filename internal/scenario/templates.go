@@ -155,6 +155,12 @@ func backToMenuKeyboard() []maxapi.AttachmentRequest {
 	}
 }
 
+func backToStartKeyboard() []maxapi.AttachmentRequest {
+	return []maxapi.AttachmentRequest{
+		inlineKeyboard(row(cb("Вернуться в начало", "menu:main"))),
+	}
+}
+
 func mainMenuKeyboard() []maxapi.AttachmentRequest {
 	return []maxapi.AttachmentRequest{
 		inlineKeyboard(
@@ -170,8 +176,16 @@ func mainMenuKeyboard() []maxapi.AttachmentRequest {
 func myReportsKeyboard() []maxapi.AttachmentRequest {
 	return []maxapi.AttachmentRequest{
 		inlineKeyboard(
-			row(cb("Обновить список", "menu:my_reports")),
-			row(cb("Вернуться в меню", "menu:main")),
+			row(cb("Вернуться в начало", "menu:main")),
+		),
+	}
+}
+
+func myReportDetailKeyboard() []maxapi.AttachmentRequest {
+	return []maxapi.AttachmentRequest{
+		inlineKeyboard(
+			row(cb("Вернуться к списку сообщений", "reports:back")),
+			row(cb("Вернуться в начало", "menu:main")),
 		),
 	}
 }
@@ -180,11 +194,13 @@ func myReportsListMessage(items []reporting.ReportSummary) string {
 	lines := []string{
 		"Ваши обращения:",
 	}
-	for i, item := range items {
-		lines = append(lines, fmt.Sprintf("%d. %s", i+1, formatReportMoment(item.CreatedAt, item.SendedAt)))
-		lines = append(lines, fmt.Sprintf("   Статус: %s", humanizeReportStatus(item.Status)))
+	for _, item := range items {
+		lines = append(lines, fmt.Sprintf("№%s", item.ReportNumber))
+		lines = append(lines, fmt.Sprintf("Дата: %s", formatReportMoment(item.CreatedAt, item.SendedAt)))
+		lines = append(lines, fmt.Sprintf("Статус: %s", humanizeReportStatus(item.Status)))
+		lines = append(lines, "")
 	}
-	lines = append(lines, "", "Отправьте номер обращения из списка, чтобы посмотреть подробности.")
+	lines = append(lines, "Отправьте номер сообщения, чтобы посмотреть подробности.")
 	return strings.Join(lines, "\n")
 }
 
@@ -215,7 +231,6 @@ func myReportDetailMessage(item *reporting.ReportDetail) string {
 	if value := strings.TrimSpace(item.Answer); value != "" {
 		lines = append(lines, fmt.Sprintf("Ответ: %s", value))
 	}
-	lines = append(lines, "", "Чтобы открыть другое обращение, отправьте его номер из списка.")
 	return strings.Join(lines, "\n")
 }
 
