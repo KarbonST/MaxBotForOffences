@@ -26,7 +26,7 @@ func TestNewHandlerServesCategories(t *testing.T) {
 		categories: []Item{{ID: 1, Sorting: 1, Name: "Test category"}},
 	}, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/reference/categories", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/bot/reference/categories", nil)
 	resp := httptest.NewRecorder()
 	handler.ServeHTTP(resp, req)
 
@@ -46,7 +46,7 @@ func TestNewHandlerServesCategories(t *testing.T) {
 func TestNewHandlerRejectsWrongMethod(t *testing.T) {
 	handler := NewHandler(providerStub{}, nil)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/reference/categories", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/bot/reference/categories", nil)
 	resp := httptest.NewRecorder()
 	handler.ServeHTTP(resp, req)
 

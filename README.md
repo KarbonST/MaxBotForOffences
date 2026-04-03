@@ -30,12 +30,12 @@ Go-проект для MAX-бота и backend API под ТЗ по обраще
   4. пишет стартовое событие в `messages_history`;
   5. дожимает raw-слепок, чтобы в `dialog_reports` появились `message_id` и `normalized_at`.
 - Backend уже отдаёт API, на которое можно опирать frontend и бота:
-  - `GET /api/reference/categories`
-  - `GET /api/reference/municipalities`
-  - `POST /api/reports`
-  - `GET /api/reports`
-  - `GET /api/reports/by-user/{maxUserId}`
-  - `GET /api/reports/{id}`
+  - `GET /api/bot/reference/categories`
+  - `GET /api/bot/reference/municipalities`
+  - `POST /api/bot/reports`
+  - `GET /api/bot/reports`
+  - `GET /api/bot/reports/by-user/{maxUserId}`
+  - `GET /api/bot/reports/{id}`
 
 ## Архитектура
 
@@ -115,19 +115,19 @@ go run .
 ### Endpoint-ы
 
 - `GET /healthz`
-- `GET /api/reference/categories`
-- `GET /api/reference/municipalities`
-- `POST /api/reports`
-- `GET /api/reports`
-- `GET /api/reports/by-user/{maxUserId}`
-- `GET /api/reports/{id}`
+- `GET /api/bot/reference/categories`
+- `GET /api/bot/reference/municipalities`
+- `POST /api/bot/reports`
+- `GET /api/bot/reports`
+- `GET /api/bot/reports/by-user/{maxUserId}`
+- `GET /api/bot/reports/{id}`
 
 ### Создание обращения
 
 Пример запроса:
 
 ```bash
-curl -X POST http://127.0.0.1:8091/api/reports \
+curl -X POST http://127.0.0.1:8091/api/bot/reports \
   -H 'Content-Type: application/json' \
   -d '{
     "dialog_dedup_key": "dlg-777:raw-1",
@@ -158,7 +158,7 @@ curl -X POST http://127.0.0.1:8091/api/reports \
 }
 ```
 
-### Что делает backend при `POST /api/reports`
+### Что делает backend при `POST /api/bot/reports`
 
 - валидирует и нормализует входные данные;
 - нормализует телефон (если пришёл в формате `8XXXXXXXXXX`/`7XXXXXXXXXX`, приводит к хранимому `10`-значному виду);

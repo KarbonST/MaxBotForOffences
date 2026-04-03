@@ -65,7 +65,7 @@ func TestHandlerCreateReport(t *testing.T) {
 	}}
 
 	handler := NewHandler(service, referenceStub{}, nil)
-	req := httptest.NewRequest(http.MethodPost, "/api/reports", strings.NewReader(`{"max_user_id":777,"category_id":1,"municipality_id":2,"phone":"9991234567","address":"ул. Мира","incident_time":"ночь","description":"Описание"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/bot/reports", strings.NewReader(`{"max_user_id":777,"category_id":1,"municipality_id":2,"phone":"9991234567","address":"ул. Мира","incident_time":"ночь","description":"Описание"}`))
 	resp := httptest.NewRecorder()
 
 	handler.ServeHTTP(resp, req)
@@ -83,7 +83,7 @@ func TestHandlerListReportsByUser(t *testing.T) {
 	}}
 	handler := NewHandler(service, referenceStub{}, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/reports/by-user/777", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/bot/reports/by-user/777", nil)
 	resp := httptest.NewRecorder()
 	handler.ServeHTTP(resp, req)
 
@@ -106,7 +106,7 @@ func TestHandlerGetReportByID(t *testing.T) {
 	}}
 	handler := NewHandler(service, referenceStub{}, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/reports/15", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/bot/reports/15", nil)
 	resp := httptest.NewRecorder()
 	handler.ServeHTTP(resp, req)
 
@@ -126,7 +126,7 @@ func TestHandlerGetConversation(t *testing.T) {
 	}}
 	handler := NewHandler(service, referenceStub{}, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/conversations/777", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/bot/conversations/777", nil)
 	resp := httptest.NewRecorder()
 	handler.ServeHTTP(resp, req)
 
@@ -158,7 +158,7 @@ func TestHandlerSaveConversation(t *testing.T) {
 	}}
 	handler := NewHandler(service, referenceStub{}, nil)
 
-	req := httptest.NewRequest(http.MethodPut, "/api/conversations/777", strings.NewReader(`{"user_stage":"filling_report","active_draft":{"stage":"category"}}`))
+	req := httptest.NewRequest(http.MethodPut, "/api/bot/conversations/777", strings.NewReader(`{"user_stage":"filling_report","active_draft":{"stage":"category"}}`))
 	resp := httptest.NewRecorder()
 	handler.ServeHTTP(resp, req)
 

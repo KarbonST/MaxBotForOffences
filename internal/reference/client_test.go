@@ -9,7 +9,7 @@ import (
 
 func TestClientLoadsCategories(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/reference/categories" {
+		if r.URL.Path != "/api/bot/reference/categories" {
 			http.NotFound(w, r)
 			return
 		}

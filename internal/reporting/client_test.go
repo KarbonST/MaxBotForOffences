@@ -9,7 +9,7 @@ import (
 
 func TestClientCreateReport(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/reports" || r.Method != http.MethodPost {
+		if r.URL.Path != "/api/bot/reports" || r.Method != http.MethodPost {
 			http.NotFound(w, r)
 			return
 		}
@@ -39,10 +39,10 @@ func TestClientCreateReport(t *testing.T) {
 func TestClientConversationEndpoints(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/api/conversations/777" && r.Method == http.MethodGet:
+		case r.URL.Path == "/api/bot/conversations/777" && r.Method == http.MethodGet:
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"max_user_id":777,"stage":"main_menu"}`))
-		case r.URL.Path == "/api/conversations/777" && r.Method == http.MethodPut:
+		case r.URL.Path == "/api/bot/conversations/777" && r.Method == http.MethodPut:
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"max_user_id":777,"stage":"filling_report","active_draft":{"stage":"category"}}`))
 		default:

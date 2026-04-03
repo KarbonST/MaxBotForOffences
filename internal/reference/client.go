@@ -32,11 +32,11 @@ func NewClient(baseURL string, options ClientOptions) *Client {
 }
 
 func (c *Client) Categories(ctx context.Context) ([]Item, error) {
-	return c.fetchList(ctx, "/api/reference/categories")
+	return c.fetchList(ctx, "/api/bot/reference/categories")
 }
 
 func (c *Client) Municipalities(ctx context.Context) ([]Item, error) {
-	return c.fetchList(ctx, "/api/reference/municipalities")
+	return c.fetchList(ctx, "/api/bot/reference/municipalities")
 }
 
 func (c *Client) fetchList(ctx context.Context, path string) ([]Item, error) {

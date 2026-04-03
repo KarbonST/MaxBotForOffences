@@ -35,7 +35,7 @@ func NewClient(baseURL string, options ClientOptions) *Client {
 
 func (c *Client) CreateReport(ctx context.Context, req CreateReportRequest) (*CreatedReport, error) {
 	var result CreatedReport
-	if err := c.doJSON(ctx, http.MethodPost, "/api/reports", req, &result); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, "/api/bot/reports", req, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -45,7 +45,7 @@ func (c *Client) ListReportsByMaxUserID(ctx context.Context, maxUserID int64) ([
 	var result struct {
 		Items []ReportSummary `json:"items"`
 	}
-	path := fmt.Sprintf("/api/reports/by-user/%d", maxUserID)
+	path := fmt.Sprintf("/api/bot/reports/by-user/%d", maxUserID)
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
 		return nil, err
 	}
@@ -54,7 +54,7 @@ func (c *Client) ListReportsByMaxUserID(ctx context.Context, maxUserID int64) ([
 
 func (c *Client) GetReportByID(ctx context.Context, id int64) (*ReportDetail, error) {
 	var result ReportDetail
-	path := fmt.Sprintf("/api/reports/%d", id)
+	path := fmt.Sprintf("/api/bot/reports/%d", id)
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
 		return nil, err
 	}
@@ -63,7 +63,7 @@ func (c *Client) GetReportByID(ctx context.Context, id int64) (*ReportDetail, er
 
 func (c *Client) GetConversation(ctx context.Context, maxUserID int64) (*ConversationState, error) {
 	var result ConversationState
-	path := fmt.Sprintf("/api/conversations/%d", maxUserID)
+	path := fmt.Sprintf("/api/bot/conversations/%d", maxUserID)
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
 		return nil, err
 	}
@@ -72,7 +72,7 @@ func (c *Client) GetConversation(ctx context.Context, maxUserID int64) (*Convers
 
 func (c *Client) SaveConversation(ctx context.Context, req SaveConversationRequest) (*ConversationState, error) {
 	var result ConversationState
-	path := fmt.Sprintf("/api/conversations/%d", req.MaxUserID)
+	path := fmt.Sprintf("/api/bot/conversations/%d", req.MaxUserID)
 	if err := c.doJSON(ctx, http.MethodPut, path, req, &result); err != nil {
 		return nil, err
 	}

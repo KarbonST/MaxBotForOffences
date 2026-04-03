@@ -16,10 +16,10 @@ func NewHandler(provider Provider, logger *slog.Logger) http.Handler {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	mux.HandleFunc("/api/reference/categories", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/bot/reference/categories", func(w http.ResponseWriter, r *http.Request) {
 		serveList(w, r, logger, "categories", provider.Categories)
 	})
-	mux.HandleFunc("/api/reference/municipalities", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/bot/reference/municipalities", func(w http.ResponseWriter, r *http.Request) {
 		serveList(w, r, logger, "municipalities", provider.Municipalities)
 	})
 

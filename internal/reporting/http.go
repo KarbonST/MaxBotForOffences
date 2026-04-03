@@ -21,13 +21,13 @@ func NewHandler(service *Service, refs reference.Provider, logger *slog.Logger) 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	mux.HandleFunc("/api/reference/categories", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/bot/reference/categories", func(w http.ResponseWriter, r *http.Request) {
 		serveReferenceList(w, r, logger, refs.Categories)
 	})
-	mux.HandleFunc("/api/reference/municipalities", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/bot/reference/municipalities", func(w http.ResponseWriter, r *http.Request) {
 		serveReferenceList(w, r, logger, refs.Municipalities)
 	})
-	mux.HandleFunc("/api/reports", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/bot/reports", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
 			handleCreateReport(w, r, logger, service)
@@ -37,12 +37,12 @@ func NewHandler(service *Service, refs reference.Provider, logger *slog.Logger) 
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
-	mux.HandleFunc("/api/reports/by-user/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/bot/reports/by-user/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		raw := strings.TrimPrefix(r.URL.Path, "/api/reports/by-user/")
+		raw := strings.TrimPrefix(r.URL.Path, "/api/bot/reports/by-user/")
 		maxUserID, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || maxUserID <= 0 {
 			http.Error(w, "invalid max user id", http.StatusBadRequest)
@@ -56,12 +56,12 @@ func NewHandler(service *Service, refs reference.Provider, logger *slog.Logger) 
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": items})
 	})
-	mux.HandleFunc("/api/reports/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/bot/reports/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		raw := strings.TrimPrefix(r.URL.Path, "/api/reports/")
+		raw := strings.TrimPrefix(r.URL.Path, "/api/bot/reports/")
 		id, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || id <= 0 {
 			http.Error(w, "invalid report id", http.StatusBadRequest)
@@ -79,8 +79,8 @@ func NewHandler(service *Service, refs reference.Provider, logger *slog.Logger) 
 		}
 		writeJSON(w, http.StatusOK, item)
 	})
-	mux.HandleFunc("/api/conversations/", func(w http.ResponseWriter, r *http.Request) {
-		raw := strings.TrimPrefix(r.URL.Path, "/api/conversations/")
+	mux.HandleFunc("/api/bot/conversations/", func(w http.ResponseWriter, r *http.Request) {
+		raw := strings.TrimPrefix(r.URL.Path, "/api/bot/conversations/")
 		maxUserID, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || maxUserID <= 0 {
 			http.Error(w, "invalid max user id", http.StatusBadRequest)
