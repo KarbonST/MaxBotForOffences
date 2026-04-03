@@ -89,7 +89,7 @@ func phoneKeyboard() []maxapi.AttachmentRequest {
 	return []maxapi.AttachmentRequest{
 		inlineKeyboard(
 			row(contactBtn("Отправить мой контакт")),
-			row(cb("Вернуться в меню", "menu:main")),
+			row(cb("Вернуться в начало", "menu:main")),
 		),
 	}
 }
@@ -98,7 +98,7 @@ func extraInfoKeyboard() []maxapi.AttachmentRequest {
 	return []maxapi.AttachmentRequest{
 		inlineKeyboard(
 			row(cb("Пропустить", "report:skip_extra")),
-			row(cb("Вернуться в меню", "menu:main")),
+			row(cb("Вернуться в начало", "menu:main")),
 		),
 	}
 }
@@ -108,14 +108,14 @@ func mediaKeyboard(allowSkip bool) []maxapi.AttachmentRequest {
 		return []maxapi.AttachmentRequest{
 			inlineKeyboard(
 				row(cb("Пропустить", "report:skip_media")),
-				row(cb("Вернуться в меню", "menu:main")),
+				row(cb("Вернуться в начало", "menu:main")),
 			),
 		}
 	}
 
 	return []maxapi.AttachmentRequest{
 		inlineKeyboard(
-			row(cb("Вернуться в меню", "menu:main")),
+			row(cb("Вернуться в начало", "menu:main")),
 		),
 	}
 }
@@ -124,14 +124,14 @@ func confirmKeyboard() []maxapi.AttachmentRequest {
 	return []maxapi.AttachmentRequest{
 		inlineKeyboard(
 			row(cb("Отправить", "report:send"), cb("Отменить", "report:cancel")),
-			row(cb("Вернуться в меню", "menu:main")),
+			row(cb("Вернуться в начало", "menu:main")),
 		),
 	}
 }
 
 func backToMenuKeyboard() []maxapi.AttachmentRequest {
 	return []maxapi.AttachmentRequest{
-		inlineKeyboard(row(cb("Вернуться в меню", "menu:main"))),
+		inlineKeyboard(row(cb("Вернуться в начало", "menu:main"))),
 	}
 }
 
