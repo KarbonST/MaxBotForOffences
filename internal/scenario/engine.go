@@ -223,7 +223,7 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 	case "reports:back":
 		return e.showMyReportsList(ctx, userID)
 	case "menu:legal":
-		e.setState(userID, stateLegalInfo)
+		e.setState(userID, stateMainMenu)
 		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
 			return err
 		}
@@ -234,7 +234,7 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 		if err != nil {
 			return e.sendReferenceLookupError(ctx, userID)
 		}
-		e.setState(userID, stateViolationsList)
+		e.setState(userID, stateMainMenu)
 		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
 			return err
 		}
@@ -528,18 +528,13 @@ func (e *Engine) showWelcome(ctx context.Context, userID int64) error {
 }
 
 func (e *Engine) showAbout(ctx context.Context, userID int64) error {
-	e.resetSession(userID)
 	session := e.session(userID)
-	e.setState(userID, stateAbout)
-	session = e.session(userID)
-	if err := e.persistStateOrReply(ctx, userID, session, true); err != nil {
+	applyState(session, stateMainMenu)
+	if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
 		return err
 	}
-	text, attachments := aboutMessage()
-	if err := e.reply(ctx, userID, text, attachments); err != nil {
-		return err
-	}
-	return e.showMainMenu(ctx, userID)
+	text, _ := aboutMessage()
+	return e.sendText(ctx, userID, text, mainMenuKeyboard())
 }
 
 func (e *Engine) showUnsupportedInput(ctx context.Context, userID int64) error {

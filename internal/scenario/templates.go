@@ -13,17 +13,7 @@ import (
 var userFacingLocation = loadUserFacingLocation()
 
 func mainMenuMessage() (string, []maxapi.AttachmentRequest) {
-	text := strings.Join([]string{
-		"Главное меню.",
-		"Выберите действие:",
-		"1. Список нарушений.",
-		"2. Сообщить о нарушении.",
-		"3. Юридическая информация.",
-		"4. Мои сообщения.",
-		"5. О боте.",
-	}, "\n")
-
-	return text, mainMenuKeyboard()
+	return "Для просмотра списка нарушений, ответственность за совершение которых предусмотрена региональным законодательством, нажмите кнопку «Список нарушений». Чтобы оставить сообщение о правонарушении, нажмите «Сообщить о нарушении». Перед использованием бота ознакомьтесь с юридической информацией, для этого нажмите на кнопку «Юридическая информация».", mainMenuKeyboard()
 }
 
 func welcomeMessage() (string, []maxapi.AttachmentRequest) {
@@ -59,12 +49,7 @@ func legalAndConsentText() string {
 }
 
 func legalMessage() (string, []maxapi.AttachmentRequest) {
-	return legalAndConsentText(), []maxapi.AttachmentRequest{
-		inlineKeyboard(
-			row(cb("Вернуться в начало", "menu:main")),
-			row(cb("Сообщить о нарушении", "menu:report")),
-		),
-	}
+	return legalAndConsentText(), mainMenuKeyboard()
 }
 
 func violationsMessage(items []reference.Item) (string, []maxapi.AttachmentRequest) {
@@ -72,12 +57,7 @@ func violationsMessage(items []reference.Item) (string, []maxapi.AttachmentReque
 	for i, item := range items {
 		lines = append(lines, fmt.Sprintf("%d. %s", i+1, item.Name))
 	}
-	return strings.Join(lines, "\n"), []maxapi.AttachmentRequest{
-		inlineKeyboard(
-			row(cb("Вернуться в начало", "menu:main")),
-			row(cb("Сообщить о нарушении", "menu:report")),
-		),
-	}
+	return strings.Join(lines, "\n"), mainMenuKeyboard()
 }
 
 func consentMessage() (string, []maxapi.AttachmentRequest) {

@@ -118,6 +118,37 @@ func inlineKeyboardPayload(t *testing.T, body maxapi.NewMessageBody) maxapi.Inli
 	}
 	return payload
 }
+
+func assertMainMenuKeyboard(t *testing.T, body maxapi.NewMessageBody) {
+	t.Helper()
+
+	if !strings.Contains(body.Text, "Для просмотра списка нарушений") {
+		t.Fatalf("expected main menu helper text, got %q", body.Text)
+	}
+
+	payload := inlineKeyboardPayload(t, body)
+	if len(payload.Buttons) != 5 {
+		t.Fatalf("expected 5 rows, got %+v", payload.Buttons)
+	}
+	expected := []struct {
+		text    string
+		payload string
+	}{
+		{text: "Список нарушений", payload: "menu:violations"},
+		{text: "Сообщить о нарушении", payload: "menu:report"},
+		{text: "Юридическая информация", payload: "menu:legal"},
+		{text: "Мои сообщения", payload: "menu:my_reports"},
+		{text: "О боте", payload: "menu:about"},
+	}
+	for i, row := range payload.Buttons {
+		if len(row) != 1 {
+			t.Fatalf("expected single button in row %d, got %+v", i, row)
+		}
+		if row[0].Text != expected[i].text || row[0].Payload != expected[i].payload {
+			t.Fatalf("unexpected button in row %d: %+v", i, row[0])
+		}
+	}
+}
 func (m *reportSinkMock) Store(_ context.Context, payload report.DialogPayload) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -298,9 +329,7 @@ func TestFlowFallbackToMenuForUnknownState(t *testing.T) {
 	if !strings.Contains(texts[0], "Не могу распознать вашу команду") {
 		t.Fatalf("expected unsupported input response first, got %q", texts[0])
 	}
-	if !strings.Contains(texts[1], "Главное меню") {
-		t.Fatalf("expected main menu response second, got %q", texts[1])
-	}
+	assertMainMenuKeyboard(t, mock.lastMessage())
 }
 
 func TestUnsupportedInputShowsNoticeAndRedirectsToMenu(t *testing.T) {
@@ -326,9 +355,7 @@ func TestUnsupportedInputShowsNoticeAndRedirectsToMenu(t *testing.T) {
 	if !strings.Contains(texts[len(texts)-2], "Не могу распознать вашу команду, вы будете перенаправлены в главное меню.") {
 		t.Fatalf("expected unsupported-input notice before redirect, got %q", texts[len(texts)-2])
 	}
-	if !strings.Contains(texts[len(texts)-1], "Главное меню") {
-		t.Fatalf("expected main menu message after redirect, got %q", texts[len(texts)-1])
-	}
+	assertMainMenuKeyboard(t, mock.lastMessage())
 }
 
 func TestFirstPlainMessageShowsWelcomeAndMainMenu(t *testing.T) {
@@ -347,9 +374,7 @@ func TestFirstPlainMessageShowsWelcomeAndMainMenu(t *testing.T) {
 	if !strings.Contains(texts[0], "Данный бот создан для оперативного сбора информации") {
 		t.Fatalf("expected welcome text first, got %q", texts[0])
 	}
-	if !strings.Contains(texts[1], "Главное меню") {
-		t.Fatalf("expected main menu text second, got %q", texts[1])
-	}
+	assertMainMenuKeyboard(t, mock.lastMessage())
 }
 
 func TestBotStartedShowsWelcomeMessage(t *testing.T) {
@@ -374,9 +399,7 @@ func TestBotStartedShowsWelcomeMessage(t *testing.T) {
 	if !strings.Contains(texts[0], "Данный бот создан для оперативного сбора информации") {
 		t.Fatalf("expected welcome text first, got %q", texts[0])
 	}
-	if !strings.Contains(texts[1], "Главное меню") {
-		t.Fatalf("expected main menu text second, got %q", texts[1])
-	}
+	assertMainMenuKeyboard(t, mock.lastMessage())
 }
 
 func TestStartCommandShowsWelcomeMessage(t *testing.T) {
@@ -395,9 +418,7 @@ func TestStartCommandShowsWelcomeMessage(t *testing.T) {
 	if !strings.Contains(texts[0], "Данный бот создан для оперативного сбора информации") {
 		t.Fatalf("expected welcome text first on /start, got %q", texts[0])
 	}
-	if !strings.Contains(texts[1], "Главное меню") {
-		t.Fatalf("expected main menu text second on /start, got %q", texts[1])
-	}
+	assertMainMenuKeyboard(t, mock.lastMessage())
 }
 
 func TestAboutReturnsUserToMainMenuState(t *testing.T) {
@@ -412,14 +433,15 @@ func TestAboutReturnsUserToMainMenuState(t *testing.T) {
 	}
 
 	texts := mock.messageTexts()
-	if len(texts) != 2 {
-		t.Fatalf("expected 2 messages, got %d: %#v", len(texts), texts)
+	if len(texts) != 1 {
+		t.Fatalf("expected 1 message, got %d: %#v", len(texts), texts)
 	}
 	if !strings.Contains(texts[0], "Данный бот создан для оперативного сбора информации") {
-		t.Fatalf("expected about text first, got %q", texts[0])
+		t.Fatalf("expected about text, got %q", texts[0])
 	}
-	if !strings.Contains(texts[1], "Главное меню") {
-		t.Fatalf("expected main menu text second, got %q", texts[1])
+	payload := inlineKeyboardPayload(t, mock.lastMessage())
+	if len(payload.Buttons) != 5 {
+		t.Fatalf("expected main menu keyboard after about, got %+v", payload.Buttons)
 	}
 
 	session := engine.session(userID)
@@ -445,14 +467,12 @@ func TestLegalInfoMatchesSpecTextAndButtons(t *testing.T) {
 		t.Fatalf("expected detailed legal text, got %q", last.Text)
 	}
 	payload := inlineKeyboardPayload(t, last)
-	if len(payload.Buttons) != 2 {
-		t.Fatalf("expected 2 rows, got %+v", payload.Buttons)
+	if len(payload.Buttons) != 5 {
+		t.Fatalf("expected main menu keyboard after legal info, got %+v", payload.Buttons)
 	}
-	if payload.Buttons[0][0].Text != "Вернуться в начало" || payload.Buttons[0][0].Payload != "menu:main" {
-		t.Fatalf("unexpected first button: %+v", payload.Buttons[0][0])
-	}
-	if payload.Buttons[1][0].Text != "Сообщить о нарушении" || payload.Buttons[1][0].Payload != "menu:report" {
-		t.Fatalf("unexpected second button: %+v", payload.Buttons[1][0])
+	session := engine.session(userID)
+	if session.State != stateMainMenu {
+		t.Fatalf("expected state %q after legal info, got %q", stateMainMenu, session.State)
 	}
 }
 
@@ -466,34 +486,7 @@ func TestMainMenuMatchesSpecButtons(t *testing.T) {
 	}
 
 	last := mock.lastMessage()
-	if !strings.Contains(last.Text, "1. Список нарушений.") {
-		t.Fatalf("expected main menu text to list violations first, got %q", last.Text)
-	}
-	if !strings.Contains(last.Text, "5. О боте.") {
-		t.Fatalf("expected main menu text to include about bot item, got %q", last.Text)
-	}
-	payload := inlineKeyboardPayload(t, last)
-	if len(payload.Buttons) != 5 {
-		t.Fatalf("expected 5 rows, got %+v", payload.Buttons)
-	}
-	expected := []struct {
-		text    string
-		payload string
-	}{
-		{text: "Список нарушений", payload: "menu:violations"},
-		{text: "Сообщить о нарушении", payload: "menu:report"},
-		{text: "Юридическая информация", payload: "menu:legal"},
-		{text: "Мои сообщения", payload: "menu:my_reports"},
-		{text: "О боте", payload: "menu:about"},
-	}
-	for i, row := range payload.Buttons {
-		if len(row) != 1 {
-			t.Fatalf("expected single button in row %d, got %+v", i, row)
-		}
-		if row[0].Text != expected[i].text || row[0].Payload != expected[i].payload {
-			t.Fatalf("unexpected button in row %d: %+v", i, row[0])
-		}
-	}
+	assertMainMenuKeyboard(t, last)
 }
 
 func TestViolationsListMatchesSpecButtons(t *testing.T) {
@@ -507,14 +500,12 @@ func TestViolationsListMatchesSpecButtons(t *testing.T) {
 
 	last := mock.lastMessage()
 	payload := inlineKeyboardPayload(t, last)
-	if len(payload.Buttons) != 2 {
-		t.Fatalf("expected 2 rows, got %+v", payload.Buttons)
+	if len(payload.Buttons) != 5 {
+		t.Fatalf("expected main menu keyboard after violations list, got %+v", payload.Buttons)
 	}
-	if payload.Buttons[0][0].Text != "Вернуться в начало" || payload.Buttons[0][0].Payload != "menu:main" {
-		t.Fatalf("unexpected first button: %+v", payload.Buttons[0][0])
-	}
-	if payload.Buttons[1][0].Text != "Сообщить о нарушении" || payload.Buttons[1][0].Payload != "menu:report" {
-		t.Fatalf("unexpected second button: %+v", payload.Buttons[1][0])
+	session := engine.session(userID)
+	if session.State != stateMainMenu {
+		t.Fatalf("expected state %q after violations list, got %q", stateMainMenu, session.State)
 	}
 }
 
@@ -526,20 +517,6 @@ func TestButtonOnlyStatesDoNotFallBackToUnsupportedInput(t *testing.T) {
 		expectedState       BotState
 		expectedTextSnippet string
 	}{
-		{
-			name:                "legal info",
-			userID:              1037,
-			initialUpdate:       callbackUpdate(1037, "cb-legal", "menu:legal"),
-			expectedState:       stateLegalInfo,
-			expectedTextSnippet: "В этом разделе используйте кнопки ниже.",
-		},
-		{
-			name:                "violations list",
-			userID:              1038,
-			initialUpdate:       callbackUpdate(1038, "cb-violations", "menu:violations"),
-			expectedState:       stateViolationsList,
-			expectedTextSnippet: "В этом разделе используйте кнопки ниже.",
-		},
 		{
 			name:                "report consent",
 			userID:              1039,
