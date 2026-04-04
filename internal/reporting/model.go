@@ -1,6 +1,7 @@
 package reporting
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -36,16 +37,24 @@ var (
 )
 
 type CreateReportRequest struct {
-	DialogDedupKey string   `json:"dialog_dedup_key,omitempty"`
-	MaxUserID      int64    `json:"max_user_id"`
-	CategoryID     int      `json:"category_id"`
-	MunicipalityID int      `json:"municipality_id"`
-	Phone          string   `json:"phone"`
-	Address        string   `json:"address"`
-	IncidentTime   string   `json:"incident_time"`
-	Description    string   `json:"description"`
-	AdditionalInfo string   `json:"additional_info,omitempty"`
-	AttachmentLog  []string `json:"attachment_log,omitempty"`
+	DialogDedupKey string            `json:"dialog_dedup_key,omitempty"`
+	MaxUserID      int64             `json:"max_user_id"`
+	CategoryID     int               `json:"category_id"`
+	MunicipalityID int               `json:"municipality_id"`
+	Phone          string            `json:"phone"`
+	Address        string            `json:"address"`
+	IncidentTime   string            `json:"incident_time"`
+	Description    string            `json:"description"`
+	AdditionalInfo string            `json:"additional_info,omitempty"`
+	AttachmentLog  []string          `json:"attachment_log,omitempty"`
+	Attachments    []MediaAttachment `json:"attachments,omitempty"`
+}
+
+type MediaAttachment struct {
+	Type     string          `json:"type"`
+	Payload  json.RawMessage `json:"payload,omitempty"`
+	FileName string          `json:"file_name,omitempty"`
+	MIMEType string          `json:"mime_type,omitempty"`
 }
 
 type CreatedReport struct {
@@ -132,6 +141,11 @@ func (r *CreateReportRequest) Normalize() {
 	r.IncidentTime = strings.TrimSpace(r.IncidentTime)
 	r.Description = strings.TrimSpace(r.Description)
 	r.AdditionalInfo = strings.TrimSpace(r.AdditionalInfo)
+	for i := range r.Attachments {
+		r.Attachments[i].Type = strings.TrimSpace(strings.ToLower(r.Attachments[i].Type))
+		r.Attachments[i].FileName = strings.TrimSpace(r.Attachments[i].FileName)
+		r.Attachments[i].MIMEType = strings.TrimSpace(strings.ToLower(r.Attachments[i].MIMEType))
+	}
 }
 
 func (r *SaveConversationRequest) Normalize() {
@@ -169,6 +183,16 @@ func (r CreateReportRequest) Validate() error {
 	}
 	if len([]rune(r.AdditionalInfo)) > 3900 {
 		return fmt.Errorf("%w: additional_info length must be <= 3900", ErrInvalidRequest)
+	}
+	if len(r.Attachments) > 5 {
+		return fmt.Errorf("%w: attachments count must be <= 5", ErrInvalidRequest)
+	}
+	for _, item := range r.Attachments {
+		switch item.Type {
+		case "photo", "image", "video":
+		default:
+			return fmt.Errorf("%w: unsupported attachment type %q", ErrInvalidRequest, item.Type)
+		}
 	}
 	return nil
 }

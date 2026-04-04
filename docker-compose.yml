@@ -31,6 +31,7 @@ services:
     environment:
       TZ: ${TZ:-Europe/Moscow}
       DATABASE_URL: postgres://${POSTGRES_USER:-maxbot}:${POSTGRES_PASSWORD:-maxbot}@postgres:5432/${POSTGRES_DB:-maxbot}?sslmode=disable
+      MEDIA_UPLOAD_ROOT: ${MEDIA_UPLOAD_ROOT:-/var/www/violations-upload}
       CORE_API_ADDR: :8091
       CORE_API_READ_TIMEOUT: ${CORE_API_READ_TIMEOUT:-5s}
       CORE_API_WRITE_TIMEOUT: ${CORE_API_WRITE_TIMEOUT:-5s}

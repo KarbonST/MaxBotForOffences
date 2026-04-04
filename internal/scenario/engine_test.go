@@ -841,6 +841,59 @@ func TestFlowRejectsLocationAttachmentOnMediaStepWithSkipHint(t *testing.T) {
 	}
 }
 
+func TestFlowSendsMediaPayloadToCreateReport(t *testing.T) {
+	mock := &senderMock{}
+	reportMock := &reportSinkMock{}
+	creatorMock := &reportCreatorMock{}
+	engine := New(mock, referenceProviderMock{}, WithReportSink(reportMock), WithReportCreator(creatorMock))
+	userID := int64(1300)
+
+	prepareSteps := []maxapi.Update{
+		callbackUpdate(userID, "cb1", "report:consent_yes"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "79991234567"),
+		textUpdate(userID, "ул. Мира, дом 1"),
+		textUpdate(userID, "31/03/26 14:45"),
+		textUpdate(userID, "Описание нарушения"),
+	}
+	for _, step := range prepareSteps {
+		if err := engine.HandleUpdate(context.Background(), step); err != nil {
+			t.Fatalf("HandleUpdate() error = %v", err)
+		}
+	}
+
+	rawPhoto, err := json.Marshal(map[string]any{"token": "photo_token_1"})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if err := engine.HandleUpdate(context.Background(), messageWithAttachmentsUpdate(userID, "", []maxapi.AttachmentBody{
+		{Type: "photo", RawPayload: rawPhoto},
+	})); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb2", "report:skip_extra")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb3", "report:send")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	if len(creatorMock.requests) != 1 {
+		t.Fatalf("expected 1 create report request, got %d", len(creatorMock.requests))
+	}
+	req := creatorMock.requests[0]
+	if len(req.Attachments) != 1 {
+		t.Fatalf("expected one attachment in create request, got %+v", req.Attachments)
+	}
+	if req.Attachments[0].Type != "photo" {
+		t.Fatalf("expected attachment type photo, got %+v", req.Attachments[0])
+	}
+	if strings.TrimSpace(string(req.Attachments[0].Payload)) == "" {
+		t.Fatalf("expected attachment payload to be forwarded")
+	}
+}
+
 func TestFlowMyReportsShowsListAndDetails(t *testing.T) {
 	mock := &senderMock{}
 	readerMock := &reportReaderMock{

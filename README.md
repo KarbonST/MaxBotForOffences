@@ -27,8 +27,9 @@ Go-проект для MAX-бота и backend API под ТЗ по обраще
   1. сохраняет raw-слепок диалога в `dialog_reports`;
   2. создаёт реальное обращение в таблице `messages`;
   3. создаёт/обновляет пользователя в `users`;
-  4. пишет стартовое событие в `messages_history`;
-  5. дожимает raw-слепок, чтобы в `dialog_reports` появились `message_id` и `normalized_at`.
+  4. сохраняет вложения в каталог `/var/www/violations-upload/{message_id}` и пишет пути в таблицу `files`;
+  5. пишет стартовое событие в `messages_history`;
+  6. дожимает raw-слепок, чтобы в `dialog_reports` появились `message_id` и `normalized_at`.
 - Backend уже отдаёт API, на которое можно опирать frontend и бота:
   - `GET /api/bot/reference/categories`
   - `GET /api/bot/reference/municipalities`
@@ -214,6 +215,7 @@ Backend:
 
 - `TZ` - таймзона контейнера `core_api`, по умолчанию `Europe/Moscow`
 - `DATABASE_URL` - обязателен для `core_api`
+- `MEDIA_UPLOAD_ROOT` - базовый путь сохранения вложений, по умолчанию `/var/www/violations-upload`
 - `CORE_API_ADDR`
 - `CORE_API_READ_TIMEOUT`
 - `CORE_API_WRITE_TIMEOUT`
@@ -248,5 +250,5 @@ go test ./...
 ## Текущие ограничения
 
 - Пользовательские сессии бота всё ещё in-memory.
-- Вложения пока не нормализуются в таблицу `files`.
+- При отсутствии бинарного контента в payload вложения сохраняется raw payload (JSON).
 - Статусы, уточнения и уведомления реализованы пока не полностью.

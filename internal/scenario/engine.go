@@ -39,14 +39,14 @@ type Sender interface {
 }
 
 type Session struct {
-	State        BotState
-	UserStage    reporting.UserStage
-	MessageStage reporting.MessageStage
-	StartedAt    time.Time
-	Draft        Draft
-	Trace        []report.DialogStep
-	Reports      []reporting.ReportSummary
-	Loaded       bool
+	State         BotState
+	UserStage     reporting.UserStage
+	MessageStage  reporting.MessageStage
+	StartedAt     time.Time
+	Draft         Draft
+	Trace         []report.DialogStep
+	Reports       []reporting.ReportSummary
+	Loaded        bool
 	HasUserRecord bool
 }
 
@@ -61,6 +61,7 @@ type Draft struct {
 	Description      string
 	ExtraInfo        string
 	AttachmentLog    []string
+	Media            []reporting.MediaAttachment
 }
 
 type ReportSink interface {
@@ -463,7 +464,8 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 			}
 			return e.sendText(ctx, userID, "Поддерживаются только фото и видео. Попробуйте ещё раз.", mediaKeyboard(false))
 		}
-		session.Draft.AttachmentLog = append(session.Draft.AttachmentLog, logs...)
+		session.Draft.AttachmentLog = append([]string(nil), logs...)
+		session.Draft.Media = collectMediaAttachments(attachments)
 		applyState(session, stateReportExtra)
 		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
 			return err
@@ -819,6 +821,7 @@ func (e *Engine) buildCreateReportRequest(userID int64, dialogDedupKey string, s
 		Description:    session.Draft.Description,
 		AdditionalInfo: session.Draft.ExtraInfo,
 		AttachmentLog:  append([]string(nil), session.Draft.AttachmentLog...),
+		Attachments:    append([]reporting.MediaAttachment(nil), session.Draft.Media...),
 	}
 }
 
@@ -1075,6 +1078,24 @@ func attachmentSummary(items []maxapi.AttachmentBody) ([]string, bool) {
 		}
 	}
 	return result, true
+}
+
+func collectMediaAttachments(items []maxapi.AttachmentBody) []reporting.MediaAttachment {
+	if len(items) == 0 {
+		return nil
+	}
+
+	result := make([]reporting.MediaAttachment, 0, len(items))
+	for _, item := range items {
+		switch item.Type {
+		case "photo", "image", "video":
+			result = append(result, reporting.MediaAttachment{
+				Type:    item.Type,
+				Payload: append(json.RawMessage(nil), item.RawPayload...),
+			})
+		}
+	}
+	return result
 }
 
 func attachmentTypes(items []maxapi.AttachmentBody) []string {

@@ -3,8 +3,14 @@ package reporting
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,8 +18,11 @@ import (
 )
 
 type PostgresStore struct {
-	db *sql.DB
+	db           *sql.DB
+	mediaRootDir string
 }
+
+const defaultMediaRootDir = "/var/www/violations-upload"
 
 func NewPostgresStore(dsn string) (*PostgresStore, error) {
 	if strings.TrimSpace(dsn) == "" {
@@ -33,7 +42,15 @@ func NewPostgresStore(dsn string) (*PostgresStore, error) {
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 
-	return &PostgresStore{db: db}, nil
+	mediaRootDir := strings.TrimSpace(os.Getenv("MEDIA_UPLOAD_ROOT"))
+	if mediaRootDir == "" {
+		mediaRootDir = defaultMediaRootDir
+	}
+
+	return &PostgresStore{
+		db:           db,
+		mediaRootDir: mediaRootDir,
+	}, nil
 }
 
 func (s *PostgresStore) Close() error {
@@ -174,6 +191,10 @@ func (s *PostgresStore) CreateReport(ctx context.Context, req CreateReportReques
 		return nil, fmt.Errorf("insert message history: %w", err)
 	}
 
+	if err := s.storeMediaFiles(ctx, tx, result.ID, req.Attachments); err != nil {
+		return nil, err
+	}
+
 	if req.DialogDedupKey != "" {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE dialog_reports
@@ -189,6 +210,107 @@ func (s *PostgresStore) CreateReport(ctx context.Context, req CreateReportReques
 	}
 
 	return result, nil
+}
+
+func (s *PostgresStore) storeMediaFiles(ctx context.Context, tx *sql.Tx, messageID int64, items []MediaAttachment) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	directoryDisk := filepath.Join(s.mediaRootDir, strconv.FormatInt(messageID, 10))
+	directoryDB := path.Join(s.mediaRootDir, strconv.FormatInt(messageID, 10))
+	if err := os.MkdirAll(directoryDisk, 0o755); err != nil {
+		return fmt.Errorf("create media directory: %w", err)
+	}
+
+	for index, item := range items {
+		content, fileName, mimeType, ext := materializeAttachment(item, messageID, index+1)
+		filePathDisk := filepath.Join(directoryDisk, fileName)
+		if err := os.WriteFile(filePathDisk, content, 0o644); err != nil {
+			return fmt.Errorf("write media file %q: %w", filePathDisk, err)
+		}
+
+		filePathDB := path.Join(directoryDB, fileName)
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO files (message_id, path, file_name, file_size, mime_type)
+			VALUES ($1, $2, $3, $4, $5)
+		`, messageID, filePathDB, fileName, len(content), pickMIME(mimeType, ext)); err != nil {
+			return fmt.Errorf("insert media file row: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func materializeAttachment(item MediaAttachment, messageID int64, position int) ([]byte, string, string, string) {
+	ext := pickExt(item.Type)
+	fileName := strings.TrimSpace(item.FileName)
+	if fileName == "" {
+		fileName = fmt.Sprintf("%d_%02d%s", messageID, position, ext)
+	}
+
+	if decoded, ok := decodeEmbeddedBase64(item.Payload); ok {
+		return decoded, fileName, item.MIMEType, ext
+	}
+
+	trimmedPayload := bytesOrJSON(item.Payload)
+	return trimmedPayload, fileName, item.MIMEType, ext
+}
+
+func decodeEmbeddedBase64(raw json.RawMessage) ([]byte, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, false
+	}
+
+	keys := []string{"data", "file_data", "base64", "content"}
+	for _, key := range keys {
+		value, ok := payload[key]
+		if !ok {
+			continue
+		}
+		encoded, ok := value.(string)
+		if !ok {
+			continue
+		}
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
+		if err == nil && len(decoded) > 0 {
+			return decoded, true
+		}
+	}
+	return nil, false
+}
+
+func bytesOrJSON(raw json.RawMessage) []byte {
+	if len(raw) == 0 {
+		return []byte("{}")
+	}
+	return append([]byte(nil), raw...)
+}
+
+func pickExt(mediaType string) string {
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "video":
+		return ".mp4"
+	default:
+		return ".jpg"
+	}
+}
+
+func pickMIME(mimeType, ext string) string {
+	if strings.TrimSpace(mimeType) != "" {
+		return mimeType
+	}
+	switch ext {
+	case ".mp4":
+		return "video/mp4"
+	default:
+		return "image/jpeg"
+	}
 }
 
 func (s *PostgresStore) GetConversation(ctx context.Context, maxUserID int64) (*ConversationState, error) {
