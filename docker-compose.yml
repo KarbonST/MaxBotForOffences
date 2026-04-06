@@ -31,6 +31,8 @@ services:
     environment:
       TZ: ${TZ:-Europe/Moscow}
       DATABASE_URL: postgres://${POSTGRES_USER:-maxbot}:${POSTGRES_PASSWORD:-maxbot}@postgres:5432/${POSTGRES_DB:-maxbot}?sslmode=disable
+      MAX_BOT_TOKEN: ${MAX_BOT_TOKEN:-}
+      MAX_API_BASE: ${MAX_API_BASE:-https://platform-api.max.ru}
       MEDIA_UPLOAD_ROOT: ${MEDIA_UPLOAD_ROOT:-/var/www/violations-upload}
       CORE_API_ADDR: :8091
       CORE_API_READ_TIMEOUT: ${CORE_API_READ_TIMEOUT:-5s}
@@ -65,6 +67,7 @@ services:
       MAX_POLL_ONCE: ${MAX_POLL_ONCE:-0}
       MAX_POLL_MAX_CYCLES: ${MAX_POLL_MAX_CYCLES:-0}
       MAX_LOG_EMPTY_POLLS: ${MAX_LOG_EMPTY_POLLS:-0}
+      MAX_POLL_MARKER_FILE: ${MAX_POLL_MARKER_FILE:-/var/bot_state/polling_marker}
       MAX_WEBHOOK_ADDR: :8080
       MAX_WEBHOOK_PATH: ${MAX_WEBHOOK_PATH:-/webhook/max}
       MAX_WEBHOOK_SECRET: ${MAX_WEBHOOK_SECRET:-}
@@ -91,6 +94,8 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - "${BOT_PORT:-8080}:8080"
+    volumes:
+      - ${BOT_STATE_HOST_DIR:-./var/bot_state}:/var/bot_state
 
 volumes:
   postgres_data:

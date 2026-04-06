@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"max_bot/internal/maxapi"
@@ -16,12 +17,15 @@ type PollingConfig struct {
 	PollMaxCycles  int
 	LogEmptyPolls  bool
 	UpdateTypes    []string
+	MarkerFile     string
+	MarkerStore    MarkerStore
 }
 
 type PollingSource struct {
 	client *maxapi.Client
 	cfg    PollingConfig
 	logger *slog.Logger
+	store  MarkerStore
 }
 
 func NewPollingSource(client *maxapi.Client, cfg PollingConfig, logger *slog.Logger) *PollingSource {
@@ -33,11 +37,31 @@ func NewPollingSource(client *maxapi.Client, cfg PollingConfig, logger *slog.Log
 		client: client,
 		cfg:    cfg,
 		logger: logger,
+		store:  resolveMarkerStore(cfg),
 	}
+}
+
+func resolveMarkerStore(cfg PollingConfig) MarkerStore {
+	if cfg.MarkerStore != nil {
+		return cfg.MarkerStore
+	}
+	if strings.TrimSpace(cfg.MarkerFile) == "" {
+		return nil
+	}
+	return NewFileMarkerStore(cfg.MarkerFile)
 }
 
 func (s *PollingSource) Run(ctx context.Context, handler UpdateHandler) error {
 	var marker *int64
+	if s.store != nil {
+		loaded, err := s.store.Load()
+		if err != nil {
+			s.logger.Warn("не удалось загрузить polling marker", "error", err.Error())
+		} else if loaded != nil {
+			marker = loaded
+			s.logger.Info("восстановлен polling marker", "marker", *loaded)
+		}
+	}
 	cycles := 0
 
 	s.logger.Info(
@@ -71,6 +95,11 @@ func (s *PollingSource) Run(ctx context.Context, handler UpdateHandler) error {
 
 		if updates.Marker != nil {
 			marker = updates.Marker
+			if s.store != nil {
+				if err := s.store.Save(*updates.Marker); err != nil {
+					s.logger.Warn("не удалось сохранить polling marker", "marker", *updates.Marker, "error", err.Error())
+				}
+			}
 		}
 
 		if len(updates.Updates) == 0 && s.cfg.LogEmptyPolls {

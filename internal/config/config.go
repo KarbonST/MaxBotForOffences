@@ -30,6 +30,7 @@ type Config struct {
 	PollOnce      bool
 	PollMaxCycles int
 	LogEmptyPolls bool
+	PollMarkerFile string
 
 	WebhookAddr      string
 	WebhookPath      string
@@ -72,6 +73,7 @@ func Load() (Config, error) {
 		PollOnce:      getenvBool("MAX_POLL_ONCE", false),
 		PollMaxCycles: getenvInt("MAX_POLL_MAX_CYCLES", 0),
 		LogEmptyPolls: getenvBool("MAX_LOG_EMPTY_POLLS", false),
+		PollMarkerFile: strings.TrimSpace(getenv("MAX_POLL_MARKER_FILE", "var/bot_state/polling_marker")),
 
 		WebhookAddr:      getenv("MAX_WEBHOOK_ADDR", ":8080"),
 		WebhookPath:      getenv("MAX_WEBHOOK_PATH", "/webhook/max"),
@@ -109,6 +111,9 @@ func Load() (Config, error) {
 
 	if cfg.PollMaxCycles < 0 {
 		cfg.PollMaxCycles = 0
+	}
+	if cfg.PollMarkerFile == "" {
+		cfg.PollMarkerFile = "var/bot_state/polling_marker"
 	}
 
 	if cfg.RunMode != "polling" && cfg.RunMode != "webhook" {

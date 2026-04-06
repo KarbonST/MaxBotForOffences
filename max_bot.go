@@ -160,6 +160,7 @@ func makeSource(cfg config.Config, client *maxapi.Client, logger *slog.Logger) b
 			PollMaxCycles:  cfg.PollMaxCycles,
 			LogEmptyPolls:  cfg.LogEmptyPolls,
 			UpdateTypes:    cfg.UpdateTypes,
+			MarkerFile:     cfg.PollMarkerFile,
 		}, logger)
 	}
 }

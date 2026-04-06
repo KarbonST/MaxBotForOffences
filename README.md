@@ -88,6 +88,13 @@ MEDIA_UPLOAD_ROOT=/var/www/violations-upload
 MEDIA_UPLOAD_HOST_DIR=/srv/maxbot/uploads
 ```
 
+Для `polling` бот сохраняет marker последнего обработанного update в отдельный файл:
+
+- внутри контейнера: `${MAX_POLL_MARKER_FILE}` (по умолчанию `/var/bot_state/polling_marker`);
+- на хосте: `${BOT_STATE_HOST_DIR}` (по умолчанию `./var/bot_state`).
+
+Это нужно, чтобы после пересоздания контейнера бот не перечитывал старые update и не отправлял пользователям повторные ответы.
+
 Полезные команды:
 
 ```bash
@@ -217,6 +224,8 @@ curl -X POST http://127.0.0.1:8091/api/bot/reports \
 - `MAX_BOT_TOKEN` - обязателен
 - `MAX_RUN_MODE` - `polling` или `webhook`
 - `MAX_API_BASE` - base URL MAX API
+- `MAX_POLL_MARKER_FILE` - путь к файлу с persisted polling marker, по умолчанию `/var/bot_state/polling_marker`
+- `BOT_STATE_HOST_DIR` - путь на диске хоста для persisted состояния polling, по умолчанию `./var/bot_state`
 - `REFERENCE_API_BASE` - где бот берёт справочники, по умолчанию `http://127.0.0.1:8091`
 - `REFERENCE_API_TIMEOUT`
 - `REFERENCE_CACHE_TTL`
@@ -233,6 +242,8 @@ Backend:
 
 - `TZ` - таймзона контейнера `core_api`, по умолчанию `Europe/Moscow`
 - `DATABASE_URL` - обязателен для `core_api`
+- `MAX_BOT_TOKEN` - нужен `core_api`, чтобы скачивать реальные вложения из MAX
+- `MAX_API_BASE` - base URL MAX API для загрузки вложений и получения direct video links
 - `MEDIA_UPLOAD_ROOT` - базовый путь сохранения вложений, по умолчанию `/var/www/violations-upload`
 - `MEDIA_UPLOAD_HOST_DIR` - путь на диске хоста, который монтируется в `MEDIA_UPLOAD_ROOT`, по умолчанию `./var/uploads`
 - `CORE_API_ADDR`

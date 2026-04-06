@@ -27,6 +27,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.PollTimeout != 30 || cfg.PollLimit != 100 {
 		t.Fatalf("unexpected poll defaults: timeout=%d limit=%d", cfg.PollTimeout, cfg.PollLimit)
 	}
+	if cfg.PollMarkerFile != "var/bot_state/polling_marker" {
+		t.Fatalf("unexpected poll marker file default: %q", cfg.PollMarkerFile)
+	}
 	if cfg.HTTPReadTimeout != 10*time.Second || cfg.HTTPWriteTimeout != 10*time.Second {
 		t.Fatalf("unexpected http timeout defaults: read=%v write=%v", cfg.HTTPReadTimeout, cfg.HTTPWriteTimeout)
 	}
