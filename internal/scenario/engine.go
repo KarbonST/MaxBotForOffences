@@ -413,11 +413,11 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
 			return err
 		}
-		return e.sendText(ctx, userID, "Введите дату и время нарушения по формату день/месяц/год часы:минуты.", backToMenuKeyboard())
+		return e.sendText(ctx, userID, "Введите дату, время или период совершения правонарушения. Максимум 100 символов.", backToMenuKeyboard())
 	case stateReportTime:
-		incidentTime, ok := parseIncidentTime(text)
-		if !ok {
-			return e.sendText(ctx, userID, "Дата и время должны быть в формате дд/мм/гг чч:мм. Пример: 31/03/26 14:45.", backToMenuKeyboard())
+		incidentTime := strings.TrimSpace(text)
+		if len(incidentTime) == 0 || len([]rune(incidentTime)) > 100 {
+			return e.sendText(ctx, userID, "Дата и время должны быть от 1 до 100 символов.", backToMenuKeyboard())
 		}
 		session.Draft.IncidentTime = incidentTime
 		applyState(session, stateReportDesc)
@@ -651,6 +651,8 @@ func (e *Engine) ensureSessionLoaded(ctx context.Context, userID int64, session 
 			session.Draft.IncidentTime = conversation.ActiveDraft.IncidentTime
 			session.Draft.Description = conversation.ActiveDraft.Description
 			session.Draft.ExtraInfo = conversation.ActiveDraft.AdditionalInfo
+			session.Draft.AttachmentLog = append([]string(nil), conversation.ActiveDraft.AttachmentLog...)
+			session.Draft.Media = append([]reporting.MediaAttachment(nil), conversation.ActiveDraft.Attachments...)
 		}
 		if err := e.hydrateDraftNames(ctx, session); err != nil {
 			slog.Warn("не удалось восстановить названия справочников для черновика", "user_id", userID, "error", err.Error())
@@ -713,6 +715,8 @@ func (e *Engine) persistSession(ctx context.Context, userID int64, session *Sess
 			IncidentTime:   session.Draft.IncidentTime,
 			Description:    session.Draft.Description,
 			AdditionalInfo: session.Draft.ExtraInfo,
+			AttachmentLog:  append([]string(nil), session.Draft.AttachmentLog...),
+			Attachments:    append([]reporting.MediaAttachment(nil), session.Draft.Media...),
 		}
 	}
 	state, err := e.conversations.SaveConversation(ctx, req)
@@ -909,20 +913,6 @@ func normalizePhone(value string) string {
 		return ""
 	}
 	return phone
-}
-
-func parseIncidentTime(value string) (string, bool) {
-	raw := strings.TrimSpace(value)
-	if raw == "" {
-		return "", false
-	}
-
-	const layout = "02/01/06 15:04"
-	parsed, err := time.Parse(layout, raw)
-	if err != nil {
-		return "", false
-	}
-	return parsed.Format(layout), true
 }
 
 func canSkipMedia(draft Draft) bool {

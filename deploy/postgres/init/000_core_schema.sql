@@ -172,6 +172,14 @@ CREATE TABLE IF NOT EXISTS files (
     created_at TIMESTAMP DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS draft_attachments (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    attachment_log JSONB NOT NULL DEFAULT '[]'::jsonb,
+    attachments JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS clarification_requests (
     id SERIAL PRIMARY KEY,
     message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -196,6 +204,7 @@ CREATE INDEX IF NOT EXISTS idx_history_admin ON messages_history(admin_id);
 CREATE INDEX IF NOT EXISTS idx_history_notification ON messages_history(notification_id);
 
 CREATE INDEX IF NOT EXISTS idx_files_message ON files(message_id);
+CREATE INDEX IF NOT EXISTS idx_draft_attachments_updated_at ON draft_attachments(updated_at);
 
 CREATE INDEX IF NOT EXISTS idx_clarification_message ON clarification_requests(message_id);
 CREATE INDEX IF NOT EXISTS idx_clarification_status ON clarification_requests(status);
@@ -231,6 +240,12 @@ CREATE TRIGGER update_messages_updated_at
 DROP TRIGGER IF EXISTS update_admins_updated_at ON admins;
 CREATE TRIGGER update_admins_updated_at
     BEFORE UPDATE ON admins
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_draft_attachments_updated_at ON draft_attachments;
+CREATE TRIGGER update_draft_attachments_updated_at
+    BEFORE UPDATE ON draft_attachments
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 

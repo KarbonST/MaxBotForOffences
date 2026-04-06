@@ -652,7 +652,7 @@ func TestFlowSendDraftKeepsSuccessWhenRawBackfillFails(t *testing.T) {
 	}
 }
 
-func TestFlowValidationIncidentTimeError(t *testing.T) {
+func TestFlowAllowsFreeformIncidentTime(t *testing.T) {
 	mock := &senderMock{}
 	engine := New(mock, referenceProviderMock{})
 	userID := int64(105)
@@ -663,7 +663,38 @@ func TestFlowValidationIncidentTimeError(t *testing.T) {
 		textUpdate(userID, "1"),
 		textUpdate(userID, "89991234567"),
 		textUpdate(userID, "ул. Мира, дом 1"),
-		textUpdate(userID, "завтра вечером"),
+		textUpdate(userID, "в ночь с пятницы на субботу, примерно в 23:30"),
+	}
+
+	for _, step := range steps {
+		if err := engine.HandleUpdate(context.Background(), step); err != nil {
+			t.Fatalf("HandleUpdate() error = %v", err)
+		}
+	}
+
+	session := engine.session(userID)
+	if session.State != stateReportDesc {
+		t.Fatalf("expected state %q, got %q", stateReportDesc, session.State)
+	}
+	if session.Draft.IncidentTime != "в ночь с пятницы на субботу, примерно в 23:30" {
+		t.Fatalf("expected freeform incident time to be saved, got %q", session.Draft.IncidentTime)
+	}
+}
+
+func TestFlowValidationIncidentTimeError(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{})
+	userID := int64(106)
+
+	tooLongTime := strings.Repeat("а", 101)
+
+	steps := []maxapi.Update{
+		callbackUpdate(userID, "cb1", "report:consent_yes"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "89991234567"),
+		textUpdate(userID, "ул. Мира, дом 1"),
+		textUpdate(userID, tooLongTime),
 	}
 
 	for _, step := range steps {
@@ -676,7 +707,7 @@ func TestFlowValidationIncidentTimeError(t *testing.T) {
 	if session.State != stateReportTime {
 		t.Fatalf("expected state %q, got %q", stateReportTime, session.State)
 	}
-	if !strings.Contains(mock.lastText(), "формате дд/мм/гг чч:мм") {
+	if !strings.Contains(mock.lastText(), "от 1 до 100 символов") {
 		t.Fatalf("expected incident time validation text, got %q", mock.lastText())
 	}
 }
@@ -684,7 +715,7 @@ func TestFlowValidationIncidentTimeError(t *testing.T) {
 func TestFlowSkipMediaNotAllowedForNonQuietCategory(t *testing.T) {
 	mock := &senderMock{}
 	engine := New(mock, referenceProviderMock{})
-	userID := int64(106)
+	userID := int64(107)
 
 	steps := []maxapi.Update{
 		callbackUpdate(userID, "cb1", "report:consent_yes"),
@@ -891,6 +922,69 @@ func TestFlowSendsMediaPayloadToCreateReport(t *testing.T) {
 	}
 	if strings.TrimSpace(string(req.Attachments[0].Payload)) == "" {
 		t.Fatalf("expected attachment payload to be forwarded")
+	}
+}
+
+func TestFlowRestoresDraftMediaAfterReload(t *testing.T) {
+	mock := &senderMock{}
+	reportMock := &reportSinkMock{}
+	creatorMock := &reportCreatorMock{}
+	rawPhoto, err := json.Marshal(map[string]any{"url": "https://example.com/photo.webp"})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	convMock := &conversationStoreMock{
+		state: &reporting.ConversationState{
+			UserID:    44,
+			MaxUserID: 1301,
+			Stage:     reporting.UserStageFillingReport,
+			ActiveDraft: &reporting.DraftMessage{
+				ID:             91,
+				Status:         reporting.MessageStatusDraft,
+				Stage:          reporting.MessageStageAdditional,
+				CategoryID:     11,
+				MunicipalityID: 21,
+				Phone:          "9991234567",
+				Address:        "ул. Мира, дом 1",
+				IncidentTime:   "ночью",
+				Description:    "Описание нарушения",
+				AttachmentLog:  []string{"- photo"},
+				Attachments: []reporting.MediaAttachment{
+					{
+						Type:     "photo",
+						Payload:  rawPhoto,
+						FileName: "restored.webp",
+						MIMEType: "image/webp",
+					},
+				},
+			},
+		},
+	}
+	engine := New(
+		mock,
+		referenceProviderMock{},
+		WithConversationStore(convMock),
+		WithReportSink(reportMock),
+		WithReportCreator(creatorMock),
+	)
+
+	userID := int64(1301)
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb1", "report:send")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	if len(creatorMock.requests) != 1 {
+		t.Fatalf("expected 1 create report request, got %d", len(creatorMock.requests))
+	}
+	req := creatorMock.requests[0]
+	if len(req.Attachments) != 1 {
+		t.Fatalf("expected restored attachment in create request, got %+v", req.Attachments)
+	}
+	if req.Attachments[0].Type != "photo" {
+		t.Fatalf("unexpected attachment type: %+v", req.Attachments[0])
+	}
+	if len(req.AttachmentLog) != 1 || req.AttachmentLog[0] != "- photo" {
+		t.Fatalf("unexpected attachment log: %+v", req.AttachmentLog)
 	}
 }
 

@@ -104,16 +104,18 @@ type ConversationState struct {
 }
 
 type DraftMessage struct {
-	ID             int64         `json:"id,omitempty"`
-	Status         MessageStatus `json:"status,omitempty"`
-	Stage          MessageStage  `json:"stage"`
-	CategoryID     int           `json:"category_id,omitempty"`
-	MunicipalityID int           `json:"municipality_id,omitempty"`
-	Phone          string        `json:"phone,omitempty"`
-	Address        string        `json:"address,omitempty"`
-	IncidentTime   string        `json:"incident_time,omitempty"`
-	Description    string        `json:"description,omitempty"`
-	AdditionalInfo string        `json:"additional_info,omitempty"`
+	ID             int64             `json:"id,omitempty"`
+	Status         MessageStatus     `json:"status,omitempty"`
+	Stage          MessageStage      `json:"stage"`
+	CategoryID     int               `json:"category_id,omitempty"`
+	MunicipalityID int               `json:"municipality_id,omitempty"`
+	Phone          string            `json:"phone,omitempty"`
+	Address        string            `json:"address,omitempty"`
+	IncidentTime   string            `json:"incident_time,omitempty"`
+	Description    string            `json:"description,omitempty"`
+	AdditionalInfo string            `json:"additional_info,omitempty"`
+	AttachmentLog  []string          `json:"attachment_log,omitempty"`
+	Attachments    []MediaAttachment `json:"attachments,omitempty"`
 }
 
 type SaveConversationRequest struct {
@@ -141,11 +143,8 @@ func (r *CreateReportRequest) Normalize() {
 	r.IncidentTime = strings.TrimSpace(r.IncidentTime)
 	r.Description = strings.TrimSpace(r.Description)
 	r.AdditionalInfo = strings.TrimSpace(r.AdditionalInfo)
-	for i := range r.Attachments {
-		r.Attachments[i].Type = strings.TrimSpace(strings.ToLower(r.Attachments[i].Type))
-		r.Attachments[i].FileName = strings.TrimSpace(r.Attachments[i].FileName)
-		r.Attachments[i].MIMEType = strings.TrimSpace(strings.ToLower(r.Attachments[i].MIMEType))
-	}
+	r.AttachmentLog = normalizeAttachmentLog(r.AttachmentLog)
+	r.Attachments = normalizeMediaAttachments(r.Attachments)
 }
 
 func (r *SaveConversationRequest) Normalize() {
@@ -157,6 +156,8 @@ func (r *SaveConversationRequest) Normalize() {
 	r.ActiveDraft.IncidentTime = strings.TrimSpace(r.ActiveDraft.IncidentTime)
 	r.ActiveDraft.Description = strings.TrimSpace(r.ActiveDraft.Description)
 	r.ActiveDraft.AdditionalInfo = strings.TrimSpace(r.ActiveDraft.AdditionalInfo)
+	r.ActiveDraft.AttachmentLog = normalizeAttachmentLog(r.ActiveDraft.AttachmentLog)
+	r.ActiveDraft.Attachments = normalizeMediaAttachments(r.ActiveDraft.Attachments)
 }
 
 func (r CreateReportRequest) Validate() error {
@@ -239,7 +240,51 @@ func (r SaveConversationRequest) Validate() error {
 	if len([]rune(r.ActiveDraft.AdditionalInfo)) > 3900 {
 		return fmt.Errorf("%w: additional_info length must be <= 3900", ErrInvalidRequest)
 	}
+	if len(r.ActiveDraft.Attachments) > 5 {
+		return fmt.Errorf("%w: attachments count must be <= 5", ErrInvalidRequest)
+	}
+	for _, item := range r.ActiveDraft.Attachments {
+		switch item.Type {
+		case "photo", "image", "video":
+		default:
+			return fmt.Errorf("%w: unsupported attachment type %q", ErrInvalidRequest, item.Type)
+		}
+	}
 	return nil
+}
+
+func normalizeAttachmentLog(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		result = append(result, item)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func normalizeMediaAttachments(items []MediaAttachment) []MediaAttachment {
+	if len(items) == 0 {
+		return nil
+	}
+
+	result := make([]MediaAttachment, 0, len(items))
+	for _, item := range items {
+		item.Type = strings.TrimSpace(strings.ToLower(item.Type))
+		item.FileName = strings.TrimSpace(item.FileName)
+		item.MIMEType = strings.TrimSpace(strings.ToLower(item.MIMEType))
+		result = append(result, item)
+	}
+	return result
 }
 
 func normalizeFilter(filter ListReportsFilter) ListReportsFilter {

@@ -196,6 +196,14 @@ func (s *PostgresStore) CreateReport(ctx context.Context, req CreateReportReques
 	if err := s.storeMediaFiles(ctx, tx, result.ID, req.Attachments); err != nil {
 		return nil, err
 	}
+	if draftID > 0 {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM draft_attachments
+			WHERE message_id = $1
+		`, result.ID); err != nil {
+			return nil, fmt.Errorf("delete draft attachments: %w", err)
+		}
+	}
 
 	if req.DialogDedupKey != "" {
 		if _, err := tx.ExecContext(ctx, `
@@ -426,7 +434,7 @@ func (s *PostgresStore) SaveConversation(ctx context.Context, req SaveConversati
 				return nil, fmt.Errorf("update draft message: %w", err)
 			}
 		} else {
-			if _, err := tx.ExecContext(ctx, `
+			if err := tx.QueryRowContext(ctx, `
 				INSERT INTO messages (
 					user_id,
 					category_id,
@@ -440,6 +448,7 @@ func (s *PostgresStore) SaveConversation(ctx context.Context, req SaveConversati
 					stage
 				)
 				VALUES ($1, $2, $3, 'draft', $4, $5, $6, $7, $8, $9)
+				RETURNING id
 			`,
 				userID,
 				nullableInt(req.ActiveDraft.CategoryID),
@@ -450,9 +459,12 @@ func (s *PostgresStore) SaveConversation(ctx context.Context, req SaveConversati
 				nullableString(req.ActiveDraft.Description),
 				nullableString(req.ActiveDraft.AdditionalInfo),
 				req.ActiveDraft.Stage,
-			); err != nil {
+			).Scan(&draftID); err != nil {
 				return nil, fmt.Errorf("insert draft message: %w", err)
 			}
+		}
+		if err := saveDraftAttachments(ctx, tx, draftID, req.ActiveDraft.AttachmentLog, req.ActiveDraft.Attachments); err != nil {
+			return nil, err
 		}
 	}
 
@@ -779,7 +791,82 @@ func loadActiveDraft(ctx context.Context, q rowQuerier, userID int64) (*DraftMes
 		}
 		return nil, fmt.Errorf("select active draft: %w", err)
 	}
+	attachmentLog, attachments, err := loadDraftAttachments(ctx, q, draft.ID)
+	if err != nil {
+		return nil, err
+	}
+	draft.AttachmentLog = attachmentLog
+	draft.Attachments = attachments
 	return &draft, nil
+}
+
+func saveDraftAttachments(ctx context.Context, tx *sql.Tx, draftID int64, attachmentLog []string, attachments []MediaAttachment) error {
+	if draftID <= 0 {
+		return nil
+	}
+	if len(attachmentLog) == 0 && len(attachments) == 0 {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM draft_attachments
+			WHERE message_id = $1
+		`, draftID); err != nil {
+			return fmt.Errorf("delete empty draft attachments: %w", err)
+		}
+		return nil
+	}
+
+	attachmentLogRaw, err := json.Marshal(attachmentLog)
+	if err != nil {
+		return fmt.Errorf("marshal draft attachment log: %w", err)
+	}
+	attachmentsRaw, err := json.Marshal(attachments)
+	if err != nil {
+		return fmt.Errorf("marshal draft attachments: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO draft_attachments (message_id, attachment_log, attachments)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (message_id) DO UPDATE
+		SET attachment_log = EXCLUDED.attachment_log,
+		    attachments = EXCLUDED.attachments,
+		    updated_at = NOW()
+	`, draftID, attachmentLogRaw, attachmentsRaw); err != nil {
+		return fmt.Errorf("upsert draft attachments: %w", err)
+	}
+
+	return nil
+}
+
+func loadDraftAttachments(ctx context.Context, q rowQuerier, draftID int64) ([]string, []MediaAttachment, error) {
+	var attachmentLogRaw []byte
+	var attachmentsRaw []byte
+	err := q.QueryRowContext(ctx, `
+		SELECT attachment_log, attachments
+		FROM draft_attachments
+		WHERE message_id = $1
+	`, draftID).Scan(&attachmentLogRaw, &attachmentsRaw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, nil
+		}
+		return nil, nil, fmt.Errorf("select draft attachments: %w", err)
+	}
+
+	var attachmentLog []string
+	if len(attachmentLogRaw) > 0 {
+		if err := json.Unmarshal(attachmentLogRaw, &attachmentLog); err != nil {
+			return nil, nil, fmt.Errorf("decode draft attachment log: %w", err)
+		}
+	}
+
+	var attachments []MediaAttachment
+	if len(attachmentsRaw) > 0 {
+		if err := json.Unmarshal(attachmentsRaw, &attachments); err != nil {
+			return nil, nil, fmt.Errorf("decode draft attachments: %w", err)
+		}
+	}
+
+	return attachmentLog, attachments, nil
 }
 
 func loadConversationTx(ctx context.Context, tx *sql.Tx, maxUserID int64) (*ConversationState, error) {
