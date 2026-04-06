@@ -38,6 +38,8 @@ services:
       CORE_API_SHUTDOWN_TIMEOUT: ${CORE_API_SHUTDOWN_TIMEOUT:-10s}
     ports:
       - "${CORE_API_PORT:-8091}:8091"
+    volumes:
+      - ${MEDIA_UPLOAD_HOST_DIR:-./var/uploads}:${MEDIA_UPLOAD_ROOT:-/var/www/violations-upload}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8091/healthz >/dev/null 2>&1 || exit 1"]
       interval: 10s
