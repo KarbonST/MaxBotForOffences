@@ -20,6 +20,7 @@ import (
 type PostgresStore struct {
 	db           *sql.DB
 	mediaRootDir string
+	mediaFetcher *mediaFetcher
 }
 
 const defaultMediaRootDir = "/var/www/violations-upload"
@@ -50,6 +51,7 @@ func NewPostgresStore(dsn string) (*PostgresStore, error) {
 	return &PostgresStore{
 		db:           db,
 		mediaRootDir: mediaRootDir,
+		mediaFetcher: newMediaFetcherFromEnv(),
 	}, nil
 }
 
@@ -224,7 +226,10 @@ func (s *PostgresStore) storeMediaFiles(ctx context.Context, tx *sql.Tx, message
 	}
 
 	for index, item := range items {
-		content, fileName, mimeType, ext := materializeAttachment(item, messageID, index+1)
+		content, fileName, mimeType, ext, err := s.materializeAttachment(ctx, item, messageID, index+1)
+		if err != nil {
+			return err
+		}
 		filePathDisk := filepath.Join(directoryDisk, fileName)
 		if err := os.WriteFile(filePathDisk, content, 0o644); err != nil {
 			return fmt.Errorf("write media file %q: %w", filePathDisk, err)
@@ -242,19 +247,28 @@ func (s *PostgresStore) storeMediaFiles(ctx context.Context, tx *sql.Tx, message
 	return nil
 }
 
-func materializeAttachment(item MediaAttachment, messageID int64, position int) ([]byte, string, string, string) {
+func (s *PostgresStore) materializeAttachment(ctx context.Context, item MediaAttachment, messageID int64, position int) ([]byte, string, string, string, error) {
 	ext := pickExt(item.Type)
-	fileName := strings.TrimSpace(item.FileName)
-	if fileName == "" {
-		fileName = fmt.Sprintf("%d_%02d%s", messageID, position, ext)
-	}
 
 	if decoded, ok := decodeEmbeddedBase64(item.Payload); ok {
-		return decoded, fileName, item.MIMEType, ext
+		fileName := buildMediaFileName(item.FileName, messageID, position, ext)
+		return decoded, fileName, item.MIMEType, ext, nil
+	}
+
+	if s.mediaFetcher != nil {
+		content, mimeType, downloadedExt, err := s.mediaFetcher.fetch(ctx, item)
+		if err == nil && len(content) > 0 {
+			if downloadedExt != "" {
+				ext = downloadedExt
+			}
+			fileName := buildMediaFileName(item.FileName, messageID, position, ext)
+			return content, fileName, firstNonEmpty(item.MIMEType, mimeType), ext, nil
+		}
 	}
 
 	trimmedPayload := bytesOrJSON(item.Payload)
-	return trimmedPayload, fileName, item.MIMEType, ext
+	fileName := buildMediaFileName(item.FileName, messageID, position, ext)
+	return trimmedPayload, fileName, item.MIMEType, ext, nil
 }
 
 func decodeEmbeddedBase64(raw json.RawMessage) ([]byte, bool) {
@@ -292,6 +306,17 @@ func bytesOrJSON(raw json.RawMessage) []byte {
 	return append([]byte(nil), raw...)
 }
 
+func buildMediaFileName(fileName string, messageID int64, position int, ext string) string {
+	cleanName := filepath.Base(strings.TrimSpace(fileName))
+	if cleanName == "" || cleanName == "." {
+		return fmt.Sprintf("%d_%02d%s", messageID, position, ext)
+	}
+	if filepath.Ext(cleanName) == "" && ext != "" {
+		return cleanName + ext
+	}
+	return cleanName
+}
+
 func pickExt(mediaType string) string {
 	switch strings.ToLower(strings.TrimSpace(mediaType)) {
 	case "video":
@@ -299,6 +324,15 @@ func pickExt(mediaType string) string {
 	default:
 		return ".jpg"
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func pickMIME(mimeType, ext string) string {
