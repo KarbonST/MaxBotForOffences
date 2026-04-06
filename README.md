@@ -70,6 +70,24 @@ frontend -> core_api -> PostgreSQL
 docker compose up --build
 ```
 
+Вложения `core_api` сохраняет на диск хоста через bind mount:
+
+- внутри контейнера: `${MEDIA_UPLOAD_ROOT}` (по умолчанию `/var/www/violations-upload`);
+- на хосте: `${MEDIA_UPLOAD_HOST_DIR}` (по умолчанию `./var/uploads`).
+
+То есть после отправки обращения с вложением файл будет лежать в каталоге:
+
+```text
+./var/uploads/{message_id}/
+```
+
+При необходимости можно задать абсолютный путь на хосте прямо в `.env`, например:
+
+```env
+MEDIA_UPLOAD_ROOT=/var/www/violations-upload
+MEDIA_UPLOAD_HOST_DIR=/srv/maxbot/uploads
+```
+
 Полезные команды:
 
 ```bash
@@ -216,6 +234,7 @@ Backend:
 - `TZ` - таймзона контейнера `core_api`, по умолчанию `Europe/Moscow`
 - `DATABASE_URL` - обязателен для `core_api`
 - `MEDIA_UPLOAD_ROOT` - базовый путь сохранения вложений, по умолчанию `/var/www/violations-upload`
+- `MEDIA_UPLOAD_HOST_DIR` - путь на диске хоста, который монтируется в `MEDIA_UPLOAD_ROOT`, по умолчанию `./var/uploads`
 - `CORE_API_ADDR`
 - `CORE_API_READ_TIMEOUT`
 - `CORE_API_WRITE_TIMEOUT`
