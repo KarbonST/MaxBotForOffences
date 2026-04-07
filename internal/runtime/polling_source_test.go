@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"max_bot/internal/maxapi"
 )
@@ -89,3 +90,34 @@ func TestPollingSourceRestoresMarkerFromFile(t *testing.T) {
 		t.Fatalf("expected saved marker 80, got %q", got)
 	}
 }
+
+func TestPollingSourceHardTimeoutDoesNotBlockNextCycle(t *testing.T) {
+	client := maxapi.NewClient("http://example.invalid", "token")
+	source := NewPollingSource(client, PollingConfig{
+		TimeoutSeconds: 1,
+		HardTimeout:    20 * time.Millisecond,
+		PollMaxCycles:  2,
+		Limit:          10,
+	}, nil)
+
+	var calls int32
+	source.fetch = func(context.Context, *int64, int, int, []string) (*maxapi.UpdateList, error) {
+		switch atomic.AddInt32(&calls, 1) {
+		case 1:
+			time.Sleep(100 * time.Millisecond)
+			return &maxapi.UpdateList{Marker: ptrInt64(1)}, nil
+		default:
+			return &maxapi.UpdateList{Marker: ptrInt64(2)}, nil
+		}
+	}
+
+	if err := source.Run(context.Background(), func(context.Context, maxapi.Update) error { return nil }); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if got := atomic.LoadInt32(&calls); got < 2 {
+		t.Fatalf("expected polling to continue after hard timeout, got %d calls", got)
+	}
+}
+
+func ptrInt64(v int64) *int64 { return &v }

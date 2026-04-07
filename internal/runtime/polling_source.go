@@ -12,6 +12,7 @@ import (
 
 type PollingConfig struct {
 	TimeoutSeconds int
+	HardTimeout    time.Duration
 	Limit          int
 	PollOnce       bool
 	PollMaxCycles  int
@@ -26,6 +27,7 @@ type PollingSource struct {
 	cfg    PollingConfig
 	logger *slog.Logger
 	store  MarkerStore
+	fetch  func(context.Context, *int64, int, int, []string) (*maxapi.UpdateList, error)
 }
 
 func NewPollingSource(client *maxapi.Client, cfg PollingConfig, logger *slog.Logger) *PollingSource {
@@ -38,6 +40,7 @@ func NewPollingSource(client *maxapi.Client, cfg PollingConfig, logger *slog.Log
 		cfg:    cfg,
 		logger: logger,
 		store:  resolveMarkerStore(cfg),
+		fetch:  client.GetUpdates,
 	}
 }
 
@@ -79,11 +82,10 @@ func (s *PollingSource) Run(ctx context.Context, handler UpdateHandler) error {
 		default:
 		}
 
-		pollCtx, cancel := context.WithTimeout(ctx, time.Duration(s.cfg.TimeoutSeconds+5)*time.Second)
-		updates, err := s.client.GetUpdates(pollCtx, marker, s.cfg.TimeoutSeconds, s.cfg.Limit, s.cfg.UpdateTypes)
-		cancel()
+		updates, err := s.fetchUpdates(ctx, marker)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				s.logger.Warn("polling запрос завершился по таймауту, запускаем новый цикл")
 				continue
 			}
 			s.logger.Warn("ошибка запроса polling", "error", err.Error())
@@ -121,5 +123,36 @@ func (s *PollingSource) Run(ctx context.Context, handler UpdateHandler) error {
 			s.logger.Info("polling остановлен: достигнут лимит циклов", "cycles", cycles)
 			return nil
 		}
+	}
+}
+
+func (s *PollingSource) fetchUpdates(ctx context.Context, marker *int64) (*maxapi.UpdateList, error) {
+	pollCtx, cancel := context.WithTimeout(ctx, time.Duration(s.cfg.TimeoutSeconds+5)*time.Second)
+	defer cancel()
+
+	hardTimeout := s.cfg.HardTimeout
+	if hardTimeout <= 0 {
+		hardTimeout = time.Duration(s.cfg.TimeoutSeconds+10) * time.Second
+	}
+
+	type result struct {
+		updates *maxapi.UpdateList
+		err     error
+	}
+
+	resultCh := make(chan result, 1)
+	go func() {
+		updates, err := s.fetch(pollCtx, marker, s.cfg.TimeoutSeconds, s.cfg.Limit, s.cfg.UpdateTypes)
+		resultCh <- result{updates: updates, err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case res := <-resultCh:
+		return res.updates, res.err
+	case <-time.After(hardTimeout):
+		s.logger.Warn("polling запрос превысил жёсткий таймаут", "hard_timeout", hardTimeout.String())
+		return nil, context.DeadlineExceeded
 	}
 }
