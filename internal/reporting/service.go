@@ -9,6 +9,12 @@ type Store interface {
 	GetReportByID(context.Context, int64) (*ReportDetail, error)
 	GetConversation(context.Context, int64) (*ConversationState, error)
 	SaveConversation(context.Context, SaveConversationRequest) (*ConversationState, error)
+	ListPendingNotifications(context.Context, int) ([]NotificationItem, error)
+	MarkNotificationSent(context.Context, int64) error
+	MarkNotificationError(context.Context, int64) error
+	GetPendingClarification(context.Context, int64) (*ClarificationPrompt, error)
+	AnswerClarification(context.Context, ClarificationAnswerRequest) error
+	RejectClarification(context.Context, ClarificationRejectRequest) error
 }
 
 type Service struct {
@@ -52,4 +58,47 @@ func (s *Service) SaveConversation(ctx context.Context, req SaveConversationRequ
 		return nil, err
 	}
 	return s.store.SaveConversation(ctx, req)
+}
+
+func (s *Service) ListPendingNotifications(ctx context.Context, limit int) ([]NotificationItem, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	return s.store.ListPendingNotifications(ctx, limit)
+}
+
+func (s *Service) MarkNotificationSent(ctx context.Context, notificationID int64) error {
+	if notificationID <= 0 {
+		return ErrInvalidRequest
+	}
+	return s.store.MarkNotificationSent(ctx, notificationID)
+}
+
+func (s *Service) MarkNotificationError(ctx context.Context, notificationID int64) error {
+	if notificationID <= 0 {
+		return ErrInvalidRequest
+	}
+	return s.store.MarkNotificationError(ctx, notificationID)
+}
+
+func (s *Service) GetPendingClarification(ctx context.Context, maxUserID int64) (*ClarificationPrompt, error) {
+	if maxUserID <= 0 {
+		return nil, ErrInvalidRequest
+	}
+	return s.store.GetPendingClarification(ctx, maxUserID)
+}
+
+func (s *Service) AnswerClarification(ctx context.Context, req ClarificationAnswerRequest) error {
+	req.Normalize()
+	if err := req.Validate(); err != nil {
+		return err
+	}
+	return s.store.AnswerClarification(ctx, req)
+}
+
+func (s *Service) RejectClarification(ctx context.Context, req ClarificationRejectRequest) error {
+	if err := req.Validate(); err != nil {
+		return err
+	}
+	return s.store.RejectClarification(ctx, req)
 }

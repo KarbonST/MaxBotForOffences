@@ -8,14 +8,22 @@ import (
 )
 
 type storeMock struct {
-	createReq         *CreateReportRequest
-	createResp        *CreatedReport
-	createErr         error
-	conversation      *ConversationState
-	conversationErr   error
-	saveConversation  *SaveConversationRequest
-	saveResponse      *ConversationState
-	saveError         error
+	createReq        *CreateReportRequest
+	createResp       *CreatedReport
+	createErr        error
+	conversation     *ConversationState
+	conversationErr  error
+	saveConversation *SaveConversationRequest
+	saveResponse     *ConversationState
+	saveError        error
+	notifications    []NotificationItem
+	notificationsErr error
+	clarification    *ClarificationPrompt
+	clarificationErr error
+	answerReq        *ClarificationAnswerRequest
+	answerErr        error
+	rejectReq        *ClarificationRejectRequest
+	rejectErr        error
 }
 
 func (m *storeMock) CreateReport(_ context.Context, req CreateReportRequest) (*CreatedReport, error) {
@@ -44,6 +52,34 @@ func (m *storeMock) SaveConversation(_ context.Context, req SaveConversationRequ
 	copied := req
 	m.saveConversation = &copied
 	return m.saveResponse, m.saveError
+}
+
+func (m *storeMock) ListPendingNotifications(context.Context, int) ([]NotificationItem, error) {
+	return m.notifications, m.notificationsErr
+}
+
+func (m *storeMock) MarkNotificationSent(context.Context, int64) error {
+	return nil
+}
+
+func (m *storeMock) MarkNotificationError(context.Context, int64) error {
+	return nil
+}
+
+func (m *storeMock) GetPendingClarification(context.Context, int64) (*ClarificationPrompt, error) {
+	return m.clarification, m.clarificationErr
+}
+
+func (m *storeMock) AnswerClarification(_ context.Context, req ClarificationAnswerRequest) error {
+	copied := req
+	m.answerReq = &copied
+	return m.answerErr
+}
+
+func (m *storeMock) RejectClarification(_ context.Context, req ClarificationRejectRequest) error {
+	copied := req
+	m.rejectReq = &copied
+	return m.rejectErr
 }
 
 func TestServiceCreateReportValidatesInput(t *testing.T) {
@@ -156,5 +192,25 @@ func TestServiceSaveConversationNormalizesAndDelegates(t *testing.T) {
 	}
 	if store.saveConversation.ActiveDraft.Address != "ул. Мира, 1" {
 		t.Fatalf("expected trimmed address, got %q", store.saveConversation.ActiveDraft.Address)
+	}
+}
+
+func TestServiceAnswerClarificationNormalizesAndDelegates(t *testing.T) {
+	store := &storeMock{}
+	service := NewService(store)
+
+	err := service.AnswerClarification(context.Background(), ClarificationAnswerRequest{
+		ClarificationID: 10,
+		MaxUserID:       100,
+		Answer:          "  Уточняю адрес  ",
+	})
+	if err != nil {
+		t.Fatalf("AnswerClarification() error = %v", err)
+	}
+	if store.answerReq == nil {
+		t.Fatalf("expected answer request to be delegated")
+	}
+	if store.answerReq.Answer != "Уточняю адрес" {
+		t.Fatalf("expected trimmed answer, got %q", store.answerReq.Answer)
 	}
 }

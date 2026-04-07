@@ -136,6 +136,38 @@ type ListReportsFilter struct {
 	Offset         int
 }
 
+type NotificationItem struct {
+	ID           int64              `json:"id"`
+	UserID       int64              `json:"user_id"`
+	MaxUserID    int64              `json:"max_user_id"`
+	Notification string             `json:"notification"`
+	Status       NotificationStatus `json:"status"`
+	CreatedAt    time.Time          `json:"created_at"`
+	SendedAt     *time.Time         `json:"sended_at,omitempty"`
+}
+
+type ClarificationPrompt struct {
+	ID               int64         `json:"id"`
+	MessageID        int64         `json:"message_id"`
+	ReportNumber     string        `json:"report_number"`
+	NotificationID   int64         `json:"notification_id,omitempty"`
+	NotificationText string        `json:"notification_text"`
+	Status           RequestStatus `json:"status"`
+	CreatedAt        time.Time     `json:"created_at"`
+	UpdatedAt        *time.Time    `json:"updated_at,omitempty"`
+}
+
+type ClarificationAnswerRequest struct {
+	ClarificationID int64  `json:"clarification_id"`
+	MaxUserID       int64  `json:"max_user_id"`
+	Answer          string `json:"answer"`
+}
+
+type ClarificationRejectRequest struct {
+	ClarificationID int64 `json:"clarification_id"`
+	MaxUserID       int64 `json:"max_user_id"`
+}
+
 func (r *CreateReportRequest) Normalize() {
 	r.DialogDedupKey = strings.TrimSpace(r.DialogDedupKey)
 	r.Phone = normalizePhone(r.Phone)
@@ -158,6 +190,10 @@ func (r *SaveConversationRequest) Normalize() {
 	r.ActiveDraft.AdditionalInfo = strings.TrimSpace(r.ActiveDraft.AdditionalInfo)
 	r.ActiveDraft.AttachmentLog = normalizeAttachmentLog(r.ActiveDraft.AttachmentLog)
 	r.ActiveDraft.Attachments = normalizeMediaAttachments(r.ActiveDraft.Attachments)
+}
+
+func (r *ClarificationAnswerRequest) Normalize() {
+	r.Answer = strings.TrimSpace(r.Answer)
 }
 
 func (r CreateReportRequest) Validate() error {
@@ -249,6 +285,29 @@ func (r SaveConversationRequest) Validate() error {
 		default:
 			return fmt.Errorf("%w: unsupported attachment type %q", ErrInvalidRequest, item.Type)
 		}
+	}
+	return nil
+}
+
+func (r ClarificationAnswerRequest) Validate() error {
+	if r.ClarificationID <= 0 {
+		return fmt.Errorf("%w: clarification_id must be positive", ErrInvalidRequest)
+	}
+	if r.MaxUserID <= 0 {
+		return fmt.Errorf("%w: max_user_id must be positive", ErrInvalidRequest)
+	}
+	if length := len([]rune(r.Answer)); length < 1 || length > 3900 {
+		return fmt.Errorf("%w: answer length must be between 1 and 3900", ErrInvalidRequest)
+	}
+	return nil
+}
+
+func (r ClarificationRejectRequest) Validate() error {
+	if r.ClarificationID <= 0 {
+		return fmt.Errorf("%w: clarification_id must be positive", ErrInvalidRequest)
+	}
+	if r.MaxUserID <= 0 {
+		return fmt.Errorf("%w: max_user_id must be positive", ErrInvalidRequest)
 	}
 	return nil
 }

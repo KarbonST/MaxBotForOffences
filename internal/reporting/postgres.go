@@ -480,6 +480,162 @@ func (s *PostgresStore) SaveConversation(ctx context.Context, req SaveConversati
 	return state, nil
 }
 
+func (s *PostgresStore) ListPendingNotifications(ctx context.Context, limit int) ([]NotificationItem, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			n.id,
+			n.user_id,
+			u.max_id,
+			n.notification,
+			n.status::text,
+			n.created_at,
+			n.sended_at
+		FROM user_notifications n
+		JOIN users u ON u.id = n.user_id
+		WHERE n.status = 'new'
+		ORDER BY n.created_at ASC, n.id ASC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list pending notifications: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]NotificationItem, 0)
+	for rows.Next() {
+		var item NotificationItem
+		var sendedAt sql.NullTime
+		if err := rows.Scan(
+			&item.ID,
+			&item.UserID,
+			&item.MaxUserID,
+			&item.Notification,
+			&item.Status,
+			&item.CreatedAt,
+			&sendedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan pending notification: %w", err)
+		}
+		if sendedAt.Valid {
+			value := sendedAt.Time
+			item.SendedAt = &value
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending notifications: %w", err)
+	}
+
+	return items, nil
+}
+
+func (s *PostgresStore) MarkNotificationSent(ctx context.Context, notificationID int64) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE user_notifications
+		SET status = 'sended',
+		    sended_at = NOW()
+		WHERE id = $1
+	`, notificationID)
+	if err != nil {
+		return fmt.Errorf("mark notification sent: %w", err)
+	}
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *PostgresStore) MarkNotificationError(ctx context.Context, notificationID int64) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE user_notifications
+		SET status = 'error'
+		WHERE id = $1
+	`, notificationID)
+	if err != nil {
+		return fmt.Errorf("mark notification error: %w", err)
+	}
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *PostgresStore) GetPendingClarification(ctx context.Context, maxUserID int64) (*ClarificationPrompt, error) {
+	var prompt ClarificationPrompt
+	var notificationID sql.NullInt64
+	var notificationText sql.NullString
+	var updatedAt sql.NullTime
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+			cr.id,
+			cr.message_id,
+			notification_link.notification_id,
+			notification_link.notification_text,
+			cr.status::text,
+			cr.created_at,
+			cr.updated_at
+		FROM clarification_requests cr
+		JOIN messages m ON m.id = cr.message_id
+		JOIN users u ON u.id = m.user_id
+		LEFT JOIN LATERAL (
+			SELECT
+				mh.notification_id,
+				un.notification AS notification_text
+			FROM messages_history mh
+			JOIN user_notifications un ON un.id = mh.notification_id
+			WHERE mh.message_id = m.id
+			  AND mh.event_type = 'status'
+			  AND mh.new_value = 'clarification_requested'
+			  AND mh.notification_id IS NOT NULL
+			ORDER BY mh.date DESC, mh.id DESC
+			LIMIT 1
+		) AS notification_link ON TRUE
+		WHERE u.max_id = $1
+		  AND cr.status = 'new'
+		  AND m.status = 'clarification_requested'
+		ORDER BY cr.created_at ASC, cr.id ASC
+		LIMIT 1
+	`, maxUserID).Scan(
+		&prompt.ID,
+		&prompt.MessageID,
+		&notificationID,
+		&notificationText,
+		&prompt.Status,
+		&prompt.CreatedAt,
+		&updatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("select pending clarification: %w", err)
+	}
+
+	prompt.ReportNumber = fmt.Sprintf("%d", prompt.MessageID)
+	if notificationID.Valid {
+		prompt.NotificationID = notificationID.Int64
+	}
+	prompt.NotificationText = strings.TrimSpace(notificationText.String)
+	if prompt.NotificationText == "" {
+		prompt.NotificationText = fmt.Sprintf("По сообщению №%s требуется уточнение администратора.", prompt.ReportNumber)
+	}
+	if updatedAt.Valid {
+		value := updatedAt.Time
+		prompt.UpdatedAt = &value
+	}
+
+	return &prompt, nil
+}
+
+func (s *PostgresStore) AnswerClarification(ctx context.Context, req ClarificationAnswerRequest) error {
+	return s.completeClarification(ctx, req.ClarificationID, req.MaxUserID, nullableString(req.Answer), RequestStatusAnswered, "clarification answered by user")
+}
+
+func (s *PostgresStore) RejectClarification(ctx context.Context, req ClarificationRejectRequest) error {
+	return s.completeClarification(ctx, req.ClarificationID, req.MaxUserID, nil, RequestStatusRejected, "clarification rejected by user")
+}
+
 func (s *PostgresStore) ListReportsByMaxUserID(ctx context.Context, maxUserID int64) ([]ReportSummary, error) {
 	return s.listReports(ctx, normalizeFilter(ListReportsFilter{MaxUserID: &maxUserID, Limit: 100}))
 }
@@ -653,6 +809,70 @@ func (s *PostgresStore) listReports(ctx context.Context, filter ListReportsFilte
 	}
 
 	return items, nil
+}
+
+func (s *PostgresStore) completeClarification(ctx context.Context, clarificationID, maxUserID int64, answer any, status RequestStatus, historyComment string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	var messageID int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT cr.message_id
+		FROM clarification_requests cr
+		JOIN messages m ON m.id = cr.message_id
+		JOIN users u ON u.id = m.user_id
+		WHERE cr.id = $1
+		  AND u.max_id = $2
+		  AND cr.status = 'new'
+		FOR UPDATE
+	`, clarificationID, maxUserID).Scan(&messageID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("select clarification for completion: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE clarification_requests
+		SET answer = $2,
+		    status = $3,
+		    updated_at = NOW()
+		WHERE id = $1
+	`, clarificationID, answer, status); err != nil {
+		return fmt.Errorf("update clarification: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE messages
+		SET status = 'in_progress',
+		    updated_at = NOW()
+		WHERE id = $1
+	`, messageID); err != nil {
+		return fmt.Errorf("update message status after clarification: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO messages_history (
+			message_id,
+			admin_id,
+			event_type,
+			new_value,
+			comments
+		)
+		VALUES ($1, NULL, 'status', 'in_progress', $2)
+	`, messageID, historyComment); err != nil {
+		return fmt.Errorf("insert clarification history: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit clarification completion: %w", err)
+	}
+	return nil
 }
 
 func (s *PostgresStore) findCreatedReportByDialogKey(ctx context.Context, tx *sql.Tx, dedupKey string) (*CreatedReport, error) {

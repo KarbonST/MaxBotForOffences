@@ -12,12 +12,18 @@ import (
 )
 
 type serviceStub struct {
-	createFunc     func(context.Context, CreateReportRequest) (*CreatedReport, error)
-	listFunc       func(context.Context, ListReportsFilter) ([]ReportSummary, error)
-	listByUserFunc func(context.Context, int64) ([]ReportSummary, error)
-	getFunc        func(context.Context, int64) (*ReportDetail, error)
-	getConversationFunc  func(context.Context, int64) (*ConversationState, error)
-	saveConversationFunc func(context.Context, SaveConversationRequest) (*ConversationState, error)
+	createFunc                func(context.Context, CreateReportRequest) (*CreatedReport, error)
+	listFunc                  func(context.Context, ListReportsFilter) ([]ReportSummary, error)
+	listByUserFunc            func(context.Context, int64) ([]ReportSummary, error)
+	getFunc                   func(context.Context, int64) (*ReportDetail, error)
+	getConversationFunc       func(context.Context, int64) (*ConversationState, error)
+	saveConversationFunc      func(context.Context, SaveConversationRequest) (*ConversationState, error)
+	listNotificationsFunc     func(context.Context, int) ([]NotificationItem, error)
+	markNotificationSentFunc  func(context.Context, int64) error
+	markNotificationErrorFunc func(context.Context, int64) error
+	getClarificationFunc      func(context.Context, int64) (*ClarificationPrompt, error)
+	answerClarificationFunc   func(context.Context, ClarificationAnswerRequest) error
+	rejectClarificationFunc   func(context.Context, ClarificationRejectRequest) error
 }
 
 func (s serviceStub) CreateReport(ctx context.Context, req CreateReportRequest) (*CreatedReport, error) {
@@ -42,6 +48,30 @@ func (s serviceStub) GetConversation(ctx context.Context, id int64) (*Conversati
 
 func (s serviceStub) SaveConversation(ctx context.Context, req SaveConversationRequest) (*ConversationState, error) {
 	return s.saveConversationFunc(ctx, req)
+}
+
+func (s serviceStub) ListPendingNotifications(ctx context.Context, limit int) ([]NotificationItem, error) {
+	return s.listNotificationsFunc(ctx, limit)
+}
+
+func (s serviceStub) MarkNotificationSent(ctx context.Context, id int64) error {
+	return s.markNotificationSentFunc(ctx, id)
+}
+
+func (s serviceStub) MarkNotificationError(ctx context.Context, id int64) error {
+	return s.markNotificationErrorFunc(ctx, id)
+}
+
+func (s serviceStub) GetPendingClarification(ctx context.Context, maxUserID int64) (*ClarificationPrompt, error) {
+	return s.getClarificationFunc(ctx, maxUserID)
+}
+
+func (s serviceStub) AnswerClarification(ctx context.Context, req ClarificationAnswerRequest) error {
+	return s.answerClarificationFunc(ctx, req)
+}
+
+func (s serviceStub) RejectClarification(ctx context.Context, req ClarificationRejectRequest) error {
+	return s.rejectClarificationFunc(ctx, req)
 }
 
 type referenceStub struct{}
@@ -167,5 +197,71 @@ func TestHandlerSaveConversation(t *testing.T) {
 	}
 	if !strings.Contains(resp.Body.String(), `"stage":"filling_report"`) {
 		t.Fatalf("unexpected body: %s", resp.Body.String())
+	}
+}
+
+func TestHandlerListPendingNotifications(t *testing.T) {
+	service := &Service{store: serviceStub{
+		listNotificationsFunc: func(_ context.Context, limit int) ([]NotificationItem, error) {
+			if limit != 5 {
+				t.Fatalf("unexpected limit: %d", limit)
+			}
+			return []NotificationItem{{ID: 1, MaxUserID: 777, Notification: "Уведомление"}}, nil
+		},
+	}}
+	handler := NewHandler(service, referenceStub{}, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/bot/notifications/pending?limit=5", nil)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.Code)
+	}
+	if !strings.Contains(resp.Body.String(), `"notification":"Уведомление"`) {
+		t.Fatalf("unexpected body: %s", resp.Body.String())
+	}
+}
+
+func TestHandlerGetPendingClarification(t *testing.T) {
+	service := &Service{store: serviceStub{
+		getClarificationFunc: func(_ context.Context, maxUserID int64) (*ClarificationPrompt, error) {
+			if maxUserID != 777 {
+				t.Fatalf("unexpected max user id: %d", maxUserID)
+			}
+			return &ClarificationPrompt{ID: 15, MessageID: 20, ReportNumber: "20", NotificationText: "Нужно уточнение"}, nil
+		},
+	}}
+	handler := NewHandler(service, referenceStub{}, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/bot/clarifications/pending/777", nil)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.Code)
+	}
+	if !strings.Contains(resp.Body.String(), `"notification_text":"Нужно уточнение"`) {
+		t.Fatalf("unexpected body: %s", resp.Body.String())
+	}
+}
+
+func TestHandlerAnswerClarification(t *testing.T) {
+	service := &Service{store: serviceStub{
+		answerClarificationFunc: func(_ context.Context, req ClarificationAnswerRequest) error {
+			if req.ClarificationID != 15 || req.MaxUserID != 777 || req.Answer != "Ответ" {
+				t.Fatalf("unexpected clarification answer request: %+v", req)
+			}
+			return nil
+		},
+	}}
+	handler := NewHandler(service, referenceStub{}, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/bot/clarifications/15/answer", strings.NewReader(`{"max_user_id":777,"answer":"Ответ"}`))
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.Code)
 	}
 }

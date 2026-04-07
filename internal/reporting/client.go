@@ -12,6 +12,18 @@ import (
 	"time"
 )
 
+type HTTPStatusError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *HTTPStatusError) Error() string {
+	if strings.TrimSpace(e.Message) == "" {
+		return fmt.Sprintf("http status %d", e.StatusCode)
+	}
+	return fmt.Sprintf("http status %d: %s", e.StatusCode, e.Message)
+}
+
 type ClientOptions struct {
 	HTTPClient *http.Client
 }
@@ -79,10 +91,54 @@ func (c *Client) SaveConversation(ctx context.Context, req SaveConversationReque
 	return &result, nil
 }
 
+func (c *Client) ListPendingNotifications(ctx context.Context, limit int) ([]NotificationItem, error) {
+	var result struct {
+		Items []NotificationItem `json:"items"`
+	}
+	path := fmt.Sprintf("/api/bot/notifications/pending?limit=%d", limit)
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
+		return nil, err
+	}
+	return result.Items, nil
+}
+
+func (c *Client) MarkNotificationSent(ctx context.Context, notificationID int64) error {
+	path := fmt.Sprintf("/api/bot/notifications/%d/sent", notificationID)
+	return c.doJSON(ctx, http.MethodPost, path, map[string]any{}, nil)
+}
+
+func (c *Client) MarkNotificationError(ctx context.Context, notificationID int64) error {
+	path := fmt.Sprintf("/api/bot/notifications/%d/error", notificationID)
+	return c.doJSON(ctx, http.MethodPost, path, map[string]any{}, nil)
+}
+
+func (c *Client) GetPendingClarification(ctx context.Context, maxUserID int64) (*ClarificationPrompt, error) {
+	var result ClarificationPrompt
+	path := fmt.Sprintf("/api/bot/clarifications/pending/%d", maxUserID)
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *Client) AnswerClarification(ctx context.Context, req ClarificationAnswerRequest) error {
+	path := fmt.Sprintf("/api/bot/clarifications/%d/answer", req.ClarificationID)
+	return c.doJSON(ctx, http.MethodPost, path, req, nil)
+}
+
+func (c *Client) RejectClarification(ctx context.Context, req ClarificationRejectRequest) error {
+	path := fmt.Sprintf("/api/bot/clarifications/%d/reject", req.ClarificationID)
+	return c.doJSON(ctx, http.MethodPost, path, req, nil)
+}
+
 func (c *Client) doJSON(ctx context.Context, method, path string, requestBody any, responseBody any) error {
-	endpoint, err := url.JoinPath(c.baseURL, path)
-	if err != nil {
-		return fmt.Errorf("join url path: %w", err)
+	endpoint := strings.TrimRight(c.baseURL, "/") + path
+	if !strings.Contains(path, "?") {
+		var err error
+		endpoint, err = url.JoinPath(c.baseURL, path)
+		if err != nil {
+			return fmt.Errorf("join url path: %w", err)
+		}
 	}
 
 	var body io.Reader
@@ -110,7 +166,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, requestBody an
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("request %s %s failed with %d: %s", method, endpoint, resp.StatusCode, strings.TrimSpace(string(raw)))
+		return classifyHTTPError(resp.StatusCode, method, endpoint, strings.TrimSpace(string(raw)))
 	}
 
 	if responseBody == nil {
@@ -120,4 +176,20 @@ func (c *Client) doJSON(ctx context.Context, method, path string, requestBody an
 		return fmt.Errorf("decode response: %w", err)
 	}
 	return nil
+}
+
+func classifyHTTPError(statusCode int, method, endpoint, message string) error {
+	base := &HTTPStatusError{
+		StatusCode: statusCode,
+		Message:    message,
+	}
+
+	switch statusCode {
+	case http.StatusBadRequest:
+		return fmt.Errorf("%w: request %s %s failed with %d: %s", ErrInvalidRequest, method, endpoint, statusCode, base.Message)
+	case http.StatusNotFound:
+		return fmt.Errorf("%w: request %s %s failed with %d: %s", ErrNotFound, method, endpoint, statusCode, base.Message)
+	default:
+		return fmt.Errorf("request %s %s failed with %d: %s", method, endpoint, statusCode, base.Message)
+	}
 }

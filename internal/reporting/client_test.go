@@ -2,6 +2,7 @@ package reporting
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -72,5 +73,22 @@ func TestClientConversationEndpoints(t *testing.T) {
 	}
 	if saved.ActiveDraft == nil || saved.ActiveDraft.Stage != MessageStageCategory {
 		t.Fatalf("unexpected saved conversation: %+v", saved)
+	}
+}
+
+func TestClientGetPendingClarificationMapsNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/bot/clarifications/pending/777" || r.Method != http.MethodGet {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "clarification not found", http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, ClientOptions{})
+	_, err := client.GetPendingClarification(context.Background(), 777)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
