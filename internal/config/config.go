@@ -25,12 +25,14 @@ type Config struct {
 	ReportOutboxRetryBase time.Duration
 	ReportOutboxRetryMax  time.Duration
 
-	PollTimeout   int
-	PollLimit     int
-	PollOnce      bool
-	PollMaxCycles int
-	LogEmptyPolls bool
-	PollMarkerFile string
+	PollTimeout              int
+	PollLimit                int
+	PollOnce                 bool
+	PollMaxCycles            int
+	LogEmptyPolls            bool
+	PollMarkerFile           string
+	NotificationPollInterval time.Duration
+	NotificationBatchSize    int
 
 	WebhookAddr      string
 	WebhookPath      string
@@ -68,12 +70,14 @@ func Load() (Config, error) {
 		ReportOutboxRetryBase: getenvDuration("REPORT_OUTBOX_RETRY_BASE", time.Second),
 		ReportOutboxRetryMax:  getenvDuration("REPORT_OUTBOX_RETRY_MAX", 30*time.Second),
 
-		PollTimeout:   getenvInt("MAX_POLL_TIMEOUT", 30),
-		PollLimit:     getenvInt("MAX_POLL_LIMIT", 100),
-		PollOnce:      getenvBool("MAX_POLL_ONCE", false),
-		PollMaxCycles: getenvInt("MAX_POLL_MAX_CYCLES", 0),
-		LogEmptyPolls: getenvBool("MAX_LOG_EMPTY_POLLS", false),
-		PollMarkerFile: strings.TrimSpace(getenv("MAX_POLL_MARKER_FILE", "var/bot_state/polling_marker")),
+		PollTimeout:              getenvInt("MAX_POLL_TIMEOUT", 30),
+		PollLimit:                getenvInt("MAX_POLL_LIMIT", 100),
+		PollOnce:                 getenvBool("MAX_POLL_ONCE", false),
+		PollMaxCycles:            getenvInt("MAX_POLL_MAX_CYCLES", 0),
+		LogEmptyPolls:            getenvBool("MAX_LOG_EMPTY_POLLS", false),
+		PollMarkerFile:           strings.TrimSpace(getenv("MAX_POLL_MARKER_FILE", "var/bot_state/polling_marker")),
+		NotificationPollInterval: getenvDuration("BOT_NOTIFICATIONS_POLL_INTERVAL", 5*time.Second),
+		NotificationBatchSize:    getenvInt("BOT_NOTIFICATIONS_BATCH_SIZE", 50),
 
 		WebhookAddr:      getenv("MAX_WEBHOOK_ADDR", ":8080"),
 		WebhookPath:      getenv("MAX_WEBHOOK_PATH", "/webhook/max"),
@@ -114,6 +118,12 @@ func Load() (Config, error) {
 	}
 	if cfg.PollMarkerFile == "" {
 		cfg.PollMarkerFile = "var/bot_state/polling_marker"
+	}
+	if cfg.NotificationPollInterval <= 0 {
+		cfg.NotificationPollInterval = 5 * time.Second
+	}
+	if cfg.NotificationBatchSize < 1 || cfg.NotificationBatchSize > 200 {
+		cfg.NotificationBatchSize = 50
 	}
 
 	if cfg.RunMode != "polling" && cfg.RunMode != "webhook" {

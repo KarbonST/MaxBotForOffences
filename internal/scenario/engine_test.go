@@ -45,6 +45,17 @@ type conversationStoreMock struct {
 	saveRequests []reporting.SaveConversationRequest
 }
 
+type clarificationStoreMock struct {
+	mu                sync.Mutex
+	prompt            *reporting.ClarificationPrompt
+	afterAnswerPrompt *reporting.ClarificationPrompt
+	answerReqs        []reporting.ClarificationAnswerRequest
+	rejectReqs        []reporting.ClarificationRejectRequest
+	answerErr         error
+	rejectErr         error
+	getErr            error
+}
+
 type referenceProviderMock struct{}
 
 func (referenceProviderMock) Categories(context.Context) ([]reference.Item, error) {
@@ -236,12 +247,68 @@ func (m *conversationStoreMock) SaveConversation(_ context.Context, req reportin
 		MaxUserID: req.MaxUserID,
 		Stage:     req.UserStage,
 	}
+	if m.state != nil {
+		state.UserID = m.state.UserID
+		if req.PreviousStage != "" {
+			state.PreviousStage = req.PreviousStage
+		} else {
+			state.PreviousStage = m.state.PreviousStage
+		}
+		if !req.DeleteDraft && req.ActiveDraft == nil && m.state.ActiveDraft != nil {
+			draft := *m.state.ActiveDraft
+			state.ActiveDraft = &draft
+		}
+	}
 	if req.ActiveDraft != nil {
 		draft := *req.ActiveDraft
 		state.ActiveDraft = &draft
 	}
+	if req.DeleteDraft {
+		state.ActiveDraft = nil
+	}
 	m.state = state
 	return state, nil
+}
+
+func (m *clarificationStoreMock) GetPendingClarification(_ context.Context, _ int64) (*reporting.ClarificationPrompt, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
+	if m.prompt == nil {
+		return nil, reporting.ErrNotFound
+	}
+	copy := *m.prompt
+	return &copy, nil
+}
+
+func (m *clarificationStoreMock) AnswerClarification(_ context.Context, req reporting.ClarificationAnswerRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.answerReqs = append(m.answerReqs, req)
+	if m.answerErr != nil {
+		return m.answerErr
+	}
+	if m.afterAnswerPrompt != nil {
+		next := *m.afterAnswerPrompt
+		m.prompt = &next
+		m.afterAnswerPrompt = nil
+	} else {
+		m.prompt = nil
+	}
+	return nil
+}
+
+func (m *clarificationStoreMock) RejectClarification(_ context.Context, req reporting.ClarificationRejectRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rejectReqs = append(m.rejectReqs, req)
+	if m.rejectErr != nil {
+		return m.rejectErr
+	}
+	m.prompt = nil
+	return nil
 }
 
 func TestFlowHappyPathToConfirm(t *testing.T) {
@@ -1152,6 +1219,299 @@ func TestFlowMyReportsEmpty(t *testing.T) {
 
 	if !strings.Contains(mock.lastText(), "У вас пока нет отправленных обращений.") {
 		t.Fatalf("expected empty reports message, got %q", mock.lastText())
+	}
+}
+
+func TestClarificationAnswerHasPriorityOverDraftAndResumesFlow(t *testing.T) {
+	mock := &senderMock{}
+	conversationMock := &conversationStoreMock{
+		state: &reporting.ConversationState{
+			UserID:        70,
+			MaxUserID:     1400,
+			Stage:         reporting.UserStageFillingReport,
+			PreviousStage: reporting.UserStageMainMenu,
+			ActiveDraft: &reporting.DraftMessage{
+				ID:             501,
+				Status:         reporting.MessageStatusDraft,
+				Stage:          reporting.MessageStageAddress,
+				CategoryID:     11,
+				MunicipalityID: 21,
+				Phone:          "9991234567",
+			},
+		},
+	}
+	clarifications := &clarificationStoreMock{
+		prompt: &reporting.ClarificationPrompt{
+			ID:               91,
+			MessageID:        15,
+			NotificationID:   801,
+			NotificationText: "По сообщению №15 нужно уточнить адрес.",
+			Status:           reporting.RequestStatusNew,
+			CreatedAt:        time.Now().UTC(),
+		},
+	}
+	engine := New(
+		mock,
+		referenceProviderMock{},
+		WithConversationStore(conversationMock),
+		WithClarificationStore(clarifications),
+		WithClarificationAckDelay(0),
+	)
+
+	userID := int64(1400)
+	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "Это ответ на уточнение")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	if len(clarifications.answerReqs) != 1 {
+		t.Fatalf("expected one clarification answer, got %d", len(clarifications.answerReqs))
+	}
+	if clarifications.answerReqs[0].ClarificationID != 91 {
+		t.Fatalf("expected clarification id 91, got %+v", clarifications.answerReqs[0])
+	}
+	if clarifications.answerReqs[0].Answer != "Это ответ на уточнение" {
+		t.Fatalf("unexpected clarification answer payload: %+v", clarifications.answerReqs[0])
+	}
+	texts := mock.messageTexts()
+	if len(texts) != 2 {
+		t.Fatalf("expected acknowledgment and resumed prompt, got %d messages: %#v", len(texts), texts)
+	}
+	if !strings.Contains(texts[0], "Спасибо за уточнение.") {
+		t.Fatalf("expected acknowledgment first, got %q", texts[0])
+	}
+	if !strings.Contains(mock.lastText(), "Введите адрес или место совершения правонарушения.") {
+		t.Fatalf("expected draft flow to resume after clarification, got %q", mock.lastText())
+	}
+
+	session := engine.session(userID)
+	if session.State != stateReportAddress {
+		t.Fatalf("expected resumed draft state %q, got %q", stateReportAddress, session.State)
+	}
+}
+
+func TestClarificationRejectResumesDraftFlow(t *testing.T) {
+	mock := &senderMock{}
+	conversationMock := &conversationStoreMock{
+		state: &reporting.ConversationState{
+			UserID:    71,
+			MaxUserID: 1401,
+			Stage:     reporting.UserStageFillingReport,
+			ActiveDraft: &reporting.DraftMessage{
+				ID:             502,
+				Status:         reporting.MessageStatusDraft,
+				Stage:          reporting.MessageStagePhone,
+				CategoryID:     11,
+				MunicipalityID: 21,
+			},
+		},
+	}
+	clarifications := &clarificationStoreMock{
+		prompt: &reporting.ClarificationPrompt{
+			ID:               92,
+			MessageID:        16,
+			NotificationID:   802,
+			NotificationText: "Уточните обстоятельства по сообщению №16.",
+			Status:           reporting.RequestStatusNew,
+			CreatedAt:        time.Now().UTC(),
+		},
+	}
+	engine := New(
+		mock,
+		referenceProviderMock{},
+		WithConversationStore(conversationMock),
+		WithClarificationStore(clarifications),
+		WithClarificationAckDelay(0),
+	)
+
+	userID := int64(1401)
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb-clarification-reject", "clarification:reject")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	if len(clarifications.rejectReqs) != 1 {
+		t.Fatalf("expected one clarification reject, got %d", len(clarifications.rejectReqs))
+	}
+	if clarifications.rejectReqs[0].ClarificationID != 92 {
+		t.Fatalf("expected clarification id 92, got %+v", clarifications.rejectReqs[0])
+	}
+	texts := mock.messageTexts()
+	if len(texts) != 2 {
+		t.Fatalf("expected rejection acknowledgment and resumed prompt, got %d messages: %#v", len(texts), texts)
+	}
+	if !strings.Contains(texts[0], "Уточнение отклонено.") {
+		t.Fatalf("expected rejection acknowledgment first, got %q", texts[0])
+	}
+	if !strings.Contains(mock.lastText(), "Введите номер телефона") {
+		t.Fatalf("expected draft flow to resume after reject, got %q", mock.lastText())
+	}
+}
+
+func TestClarificationAnswerAcknowledgesBeforeNextClarification(t *testing.T) {
+	mock := &senderMock{}
+	conversationMock := &conversationStoreMock{
+		state: &reporting.ConversationState{
+			UserID:        74,
+			MaxUserID:     1404,
+			Stage:         reporting.UserStageWaitingClarification,
+			PreviousStage: reporting.UserStageFillingReport,
+			ActiveDraft: &reporting.DraftMessage{
+				ID:    505,
+				Stage: reporting.MessageStageAddress,
+			},
+		},
+	}
+	clarifications := &clarificationStoreMock{
+		prompt: &reporting.ClarificationPrompt{
+			ID:               95,
+			MessageID:        18,
+			NotificationID:   803,
+			NotificationText: "По сообщению №18 нужно первое уточнение.",
+			Status:           reporting.RequestStatusNew,
+			CreatedAt:        time.Now().UTC(),
+		},
+		afterAnswerPrompt: &reporting.ClarificationPrompt{
+			ID:               96,
+			MessageID:        19,
+			NotificationID:   804,
+			NotificationText: "По сообщению №19 нужно ещё одно уточнение.",
+			Status:           reporting.RequestStatusNew,
+			CreatedAt:        time.Now().UTC(),
+		},
+	}
+	engine := New(
+		mock,
+		referenceProviderMock{},
+		WithConversationStore(conversationMock),
+		WithClarificationStore(clarifications),
+		WithClarificationAckDelay(0),
+	)
+
+	userID := int64(1404)
+	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "Первый ответ")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	texts := mock.messageTexts()
+	if len(texts) != 2 {
+		t.Fatalf("expected acknowledgment and next clarification prompt, got %d messages: %#v", len(texts), texts)
+	}
+	if !strings.Contains(texts[0], "Спасибо за уточнение. Есть ещё одно обращение") {
+		t.Fatalf("expected acknowledgment before next clarification, got %q", texts[0])
+	}
+	if !strings.Contains(texts[1], "По сообщению №19 нужно ещё одно уточнение.") {
+		t.Fatalf("expected next clarification prompt, got %q", texts[1])
+	}
+}
+
+func TestClarificationAnswerRepairsPreviousStageAndClearsItAfterResume(t *testing.T) {
+	mock := &senderMock{}
+	conversationMock := &conversationStoreMock{
+		state: &reporting.ConversationState{
+			UserID:        73,
+			MaxUserID:     1403,
+			Stage:         reporting.UserStageWaitingClarification,
+			PreviousStage: reporting.UserStageWaitingClarification,
+			ActiveDraft: &reporting.DraftMessage{
+				ID:             504,
+				Status:         reporting.MessageStatusDraft,
+				Stage:          reporting.MessageStageMunicipality,
+				CategoryID:     11,
+				MunicipalityID: 0,
+			},
+		},
+	}
+	clarifications := &clarificationStoreMock{
+		prompt: &reporting.ClarificationPrompt{
+			ID:               94,
+			MessageID:        18,
+			NotificationID:   803,
+			NotificationText: "Уточните детали по сообщению №18.",
+			Status:           reporting.RequestStatusNew,
+			CreatedAt:        time.Now().UTC(),
+		},
+	}
+	engine := New(
+		mock,
+		referenceProviderMock{},
+		WithConversationStore(conversationMock),
+		WithClarificationStore(clarifications),
+		WithClarificationAckDelay(0),
+	)
+
+	userID := int64(1403)
+	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "Ответ")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	if got := len(conversationMock.saveRequests); got < 2 {
+		t.Fatalf("expected clarification save and resume save, got %d", got)
+	}
+	firstSave := conversationMock.saveRequests[0]
+	if firstSave.UserStage != reporting.UserStageWaitingClarification || firstSave.PreviousStage != reporting.UserStageFillingReport {
+		t.Fatalf("expected repaired waiting_clarification save, got %+v", firstSave)
+	}
+	lastSave := conversationMock.saveRequests[len(conversationMock.saveRequests)-1]
+	if lastSave.UserStage != reporting.UserStageFillingReport {
+		t.Fatalf("expected resumed filling_report save, got %+v", lastSave)
+	}
+	if lastSave.PreviousStage != "" {
+		t.Fatalf("expected previous stage to be cleared after resume, got %+v", lastSave)
+	}
+	if !strings.Contains(mock.lastText(), "Выберите муниципалитет") && !strings.Contains(mock.lastText(), "Муниципалитет") {
+		t.Fatalf("expected municipality step to resume, got %q", mock.lastText())
+	}
+}
+
+func TestClarificationMenuShowsMainMenuWithoutDeletingDraft(t *testing.T) {
+	mock := &senderMock{}
+	conversationMock := &conversationStoreMock{
+		state: &reporting.ConversationState{
+			UserID:    72,
+			MaxUserID: 1402,
+			Stage:     reporting.UserStageFillingReport,
+			ActiveDraft: &reporting.DraftMessage{
+				ID:             503,
+				Status:         reporting.MessageStatusDraft,
+				Stage:          reporting.MessageStageDescription,
+				CategoryID:     11,
+				MunicipalityID: 21,
+				Phone:          "9991234567",
+				Address:        "ул. Мира, дом 1",
+			},
+		},
+	}
+	clarifications := &clarificationStoreMock{
+		prompt: &reporting.ClarificationPrompt{
+			ID:               93,
+			MessageID:        17,
+			NotificationText: "Нужно уточнить детали.",
+			Status:           reporting.RequestStatusNew,
+			CreatedAt:        time.Now().UTC(),
+		},
+	}
+	engine := New(
+		mock,
+		referenceProviderMock{},
+		WithConversationStore(conversationMock),
+		WithClarificationStore(clarifications),
+		WithClarificationAckDelay(0),
+	)
+
+	userID := int64(1402)
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb-clarification-menu", "menu:main")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	assertMainMenuKeyboard(t, mock.lastMessage())
+	if got := len(clarifications.rejectReqs); got != 0 {
+		t.Fatalf("expected no clarification reject on menu, got %d", got)
+	}
+	lastSave := conversationMock.saveRequests[len(conversationMock.saveRequests)-1]
+	if lastSave.DeleteDraft {
+		t.Fatalf("expected menu from clarification to preserve draft")
+	}
+	if conversationMock.state == nil || conversationMock.state.ActiveDraft == nil {
+		t.Fatalf("expected draft to remain in conversation store")
 	}
 }
 

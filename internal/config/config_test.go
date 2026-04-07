@@ -30,6 +30,12 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.PollMarkerFile != "var/bot_state/polling_marker" {
 		t.Fatalf("unexpected poll marker file default: %q", cfg.PollMarkerFile)
 	}
+	if cfg.NotificationPollInterval != 5*time.Second {
+		t.Fatalf("unexpected notification poll interval default: %v", cfg.NotificationPollInterval)
+	}
+	if cfg.NotificationBatchSize != 50 {
+		t.Fatalf("unexpected notification batch size default: %d", cfg.NotificationBatchSize)
+	}
 	if cfg.HTTPReadTimeout != 10*time.Second || cfg.HTTPWriteTimeout != 10*time.Second {
 		t.Fatalf("unexpected http timeout defaults: read=%v write=%v", cfg.HTTPReadTimeout, cfg.HTTPWriteTimeout)
 	}
@@ -79,6 +85,8 @@ func TestLoadNormalizesInvalidValues(t *testing.T) {
 	t.Setenv("REPORT_OUTBOX_RETRY_BASE", "0")
 	t.Setenv("REPORT_OUTBOX_RETRY_MAX", "1ms")
 	t.Setenv("REPORT_OUTBOX_DIR", "   ")
+	t.Setenv("BOT_NOTIFICATIONS_POLL_INTERVAL", "0")
+	t.Setenv("BOT_NOTIFICATIONS_BATCH_SIZE", "999")
 
 	cfg, err := Load()
 	if err != nil {
@@ -132,6 +140,12 @@ func TestLoadNormalizesInvalidValues(t *testing.T) {
 	}
 	if cfg.ReportOutboxDir != "var/report_outbox" {
 		t.Fatalf("expected report outbox dir fallback, got %q", cfg.ReportOutboxDir)
+	}
+	if cfg.NotificationPollInterval != 5*time.Second {
+		t.Fatalf("expected notification poll interval fallback, got %v", cfg.NotificationPollInterval)
+	}
+	if cfg.NotificationBatchSize != 50 {
+		t.Fatalf("expected notification batch fallback, got %d", cfg.NotificationBatchSize)
 	}
 }
 

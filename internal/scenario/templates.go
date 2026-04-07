@@ -129,6 +129,15 @@ func confirmKeyboard() []maxapi.AttachmentRequest {
 	}
 }
 
+func clarificationKeyboard() []maxapi.AttachmentRequest {
+	return []maxapi.AttachmentRequest{
+		inlineKeyboard(
+			row(cb("Отклонить ввод ответа", "clarification:reject")),
+			row(cb("Меню", "menu:main")),
+		),
+	}
+}
+
 func backToMenuKeyboard() []maxapi.AttachmentRequest {
 	return []maxapi.AttachmentRequest{
 		inlineKeyboard(row(cb("Вернуться в начало", "menu:main"))),

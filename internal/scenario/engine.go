@@ -3,6 +3,7 @@ package scenario
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -23,14 +24,16 @@ var phoneRe = regexp.MustCompile(`^9\d{9}$`)
 const maxTotalVideoDurationSeconds = 120
 
 type Engine struct {
-	client        Sender
-	refData       reference.Provider
-	reportSink    ReportSink
-	reportCreator ReportCreator
-	reportReader  ReportReader
-	conversations ConversationStore
-	mu            sync.Mutex
-	sessions      map[int64]*Session
+	client         Sender
+	refData        reference.Provider
+	reportSink     ReportSink
+	reportCreator  ReportCreator
+	reportReader   ReportReader
+	conversations  ConversationStore
+	clarifications ClarificationStore
+	ackDelay       time.Duration
+	mu             sync.Mutex
+	sessions       map[int64]*Session
 }
 
 type Sender interface {
@@ -41,6 +44,7 @@ type Sender interface {
 type Session struct {
 	State         BotState
 	UserStage     reporting.UserStage
+	PreviousStage reporting.UserStage
 	MessageStage  reporting.MessageStage
 	StartedAt     time.Time
 	Draft         Draft
@@ -82,6 +86,12 @@ type ConversationStore interface {
 	SaveConversation(context.Context, reporting.SaveConversationRequest) (*reporting.ConversationState, error)
 }
 
+type ClarificationStore interface {
+	GetPendingClarification(context.Context, int64) (*reporting.ClarificationPrompt, error)
+	AnswerClarification(context.Context, reporting.ClarificationAnswerRequest) error
+	RejectClarification(context.Context, reporting.ClarificationRejectRequest) error
+}
+
 type Option func(*Engine)
 
 func WithReportSink(sink ReportSink) Option {
@@ -116,15 +126,33 @@ func WithConversationStore(store ConversationStore) Option {
 	}
 }
 
+func WithClarificationStore(store ClarificationStore) Option {
+	return func(e *Engine) {
+		if store != nil {
+			e.clarifications = store
+		}
+	}
+}
+
+func WithClarificationAckDelay(delay time.Duration) Option {
+	return func(e *Engine) {
+		if delay >= 0 {
+			e.ackDelay = delay
+		}
+	}
+}
+
 func New(client Sender, refData reference.Provider, options ...Option) *Engine {
 	engine := &Engine{
-		client:        client,
-		refData:       refData,
-		reportSink:    noopReportSink{},
-		reportCreator: noopReportCreator{},
-		reportReader:  noopReportReader{},
-		conversations: noopConversationStore{},
-		sessions:      make(map[int64]*Session),
+		client:         client,
+		refData:        refData,
+		reportSink:     noopReportSink{},
+		reportCreator:  noopReportCreator{},
+		reportReader:   noopReportReader{},
+		conversations:  noopConversationStore{},
+		clarifications: noopClarificationStore{},
+		ackDelay:       2 * time.Second,
+		sessions:       make(map[int64]*Session),
 	}
 	for _, option := range options {
 		option(engine)
@@ -165,14 +193,29 @@ func (noopConversationStore) GetConversation(context.Context, int64) (*reporting
 
 func (noopConversationStore) SaveConversation(_ context.Context, req reporting.SaveConversationRequest) (*reporting.ConversationState, error) {
 	state := &reporting.ConversationState{
-		MaxUserID: req.MaxUserID,
-		Stage:     req.UserStage,
+		MaxUserID:     req.MaxUserID,
+		Stage:         req.UserStage,
+		PreviousStage: req.PreviousStage,
 	}
 	if req.ActiveDraft != nil {
 		copied := *req.ActiveDraft
 		state.ActiveDraft = &copied
 	}
 	return state, nil
+}
+
+type noopClarificationStore struct{}
+
+func (noopClarificationStore) GetPendingClarification(context.Context, int64) (*reporting.ClarificationPrompt, error) {
+	return nil, reporting.ErrNotFound
+}
+
+func (noopClarificationStore) AnswerClarification(context.Context, reporting.ClarificationAnswerRequest) error {
+	return reporting.ErrNotFound
+}
+
+func (noopClarificationStore) RejectClarification(context.Context, reporting.ClarificationRejectRequest) error {
+	return reporting.ErrNotFound
 }
 
 func (e *Engine) HandleUpdate(ctx context.Context, upd maxapi.Update) error {
@@ -214,6 +257,11 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 
 	if err := e.client.AnswerCallback(ctx, upd.Callback.CallbackID, "Принято"); err != nil {
 		slog.Warn("не удалось ответить на callback", "error", err.Error())
+	}
+
+	handled, err := e.handleClarificationCallback(ctx, userID, session, payload)
+	if handled || err != nil {
+		return err
 	}
 
 	switch payload {
@@ -305,6 +353,11 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 	}
 	if !session.HasUserRecord && text != "/start" {
 		return e.showWelcome(ctx, userID)
+	}
+
+	handled, err := e.handleClarificationMessage(ctx, userID, session, text)
+	if handled || err != nil {
+		return err
 	}
 	e.appendTrace(userID, report.DialogStep{
 		At:              time.Now().UTC(),
@@ -496,6 +549,15 @@ func (e *Engine) showMainMenu(ctx context.Context, userID int64) error {
 	return e.reply(ctx, userID, text, attachments)
 }
 
+func (e *Engine) showMainMenuWithoutReset(ctx context.Context, userID int64, session *Session) error {
+	applyState(session, stateMainMenu)
+	if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+		return err
+	}
+	text, attachments := mainMenuMessage()
+	return e.reply(ctx, userID, text, attachments)
+}
+
 func (e *Engine) showMyReportsList(ctx context.Context, userID int64) error {
 	session := e.session(userID)
 	items, err := e.reportReader.ListReportsByMaxUserID(ctx, userID)
@@ -551,6 +613,208 @@ func (e *Engine) showUnsupportedInput(ctx context.Context, userID int64) error {
 		return err
 	}
 	return e.showMainMenu(ctx, userID)
+}
+
+func (e *Engine) handleClarificationCallback(ctx context.Context, userID int64, session *Session, payload string) (bool, error) {
+	prompt, handled, err := e.currentClarificationPrompt(ctx, userID, session)
+	if handled || err != nil {
+		return true, err
+	}
+	if prompt == nil {
+		return false, nil
+	}
+
+	if payload == "clarification:reject" {
+		if err := e.clarifications.RejectClarification(ctx, reporting.ClarificationRejectRequest{
+			ClarificationID: prompt.ID,
+			MaxUserID:       userID,
+		}); err != nil {
+			slog.Error("не удалось отклонить уточнение", "user_id", userID, "clarification_id", prompt.ID, "error", err.Error())
+			return true, e.sendText(ctx, userID, "Не удалось обработать отказ от уточнения. Попробуйте ещё раз немного позже.", clarificationKeyboard())
+		}
+		return true, e.resumeAfterClarification(ctx, userID, session, "Уточнение отклонено.")
+	}
+	if payload == "menu:main" {
+		return true, e.showMainMenuWithoutReset(ctx, userID, session)
+	}
+	if strings.HasPrefix(payload, "menu:") {
+		return false, nil
+	}
+
+	return true, e.sendClarificationPrompt(ctx, userID, prompt)
+}
+
+func (e *Engine) handleClarificationMessage(ctx context.Context, userID int64, session *Session, text string) (bool, error) {
+	prompt, handled, err := e.currentClarificationPrompt(ctx, userID, session)
+	if handled || err != nil {
+		return true, err
+	}
+	if prompt == nil {
+		return false, nil
+	}
+
+	if strings.TrimSpace(text) == "" {
+		return true, e.sendClarificationPrompt(ctx, userID, prompt)
+	}
+
+	if err := e.clarifications.AnswerClarification(ctx, reporting.ClarificationAnswerRequest{
+		ClarificationID: prompt.ID,
+		MaxUserID:       userID,
+		Answer:          text,
+	}); err != nil {
+		slog.Error("не удалось сохранить ответ на уточнение", "user_id", userID, "clarification_id", prompt.ID, "error", err.Error())
+		return true, e.sendText(ctx, userID, "Не удалось сохранить ответ на уточнение. Попробуйте ещё раз немного позже.", clarificationKeyboard())
+	}
+
+	return true, e.resumeAfterClarification(ctx, userID, session, "Спасибо за уточнение.")
+}
+
+func (e *Engine) currentClarificationPrompt(ctx context.Context, userID int64, session *Session) (*reporting.ClarificationPrompt, bool, error) {
+	prompt, err := e.clarifications.GetPendingClarification(ctx, userID)
+	if err != nil {
+		if errors.Is(err, reporting.ErrNotFound) {
+			if session.State == stateClarificationRequested || session.UserStage == reporting.UserStageWaitingClarification {
+				return nil, true, e.resumeAfterClarification(ctx, userID, session, "")
+			}
+			return nil, false, nil
+		}
+		slog.Error("не удалось получить активное уточнение", "user_id", userID, "error", err.Error())
+		return nil, true, e.sendText(ctx, userID, "Не удалось получить активное уточнение. Попробуйте ещё раз немного позже.", backToMenuKeyboard())
+	}
+
+	e.ensurePreviousStage(session)
+	applyState(session, stateClarificationRequested)
+	if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+		return nil, true, err
+	}
+	return prompt, false, nil
+}
+
+func (e *Engine) resumeAfterClarification(ctx context.Context, userID int64, session *Session, acknowledgment string) error {
+	prompt, err := e.clarifications.GetPendingClarification(ctx, userID)
+	if err == nil {
+		if acknowledgment != "" {
+			if err := e.sendText(ctx, userID, acknowledgment+" Есть ещё одно обращение, по которому требуется уточнение.", nil); err != nil {
+				return err
+			}
+			if err := e.pauseAfterClarificationAck(ctx); err != nil {
+				return err
+			}
+		}
+		applyState(session, stateClarificationRequested)
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
+		return e.sendClarificationPrompt(ctx, userID, prompt)
+	}
+	if err != nil && !errors.Is(err, reporting.ErrNotFound) {
+		slog.Error("не удалось перепроверить уточнения", "user_id", userID, "error", err.Error())
+		return e.sendText(ctx, userID, "Не удалось обновить состояние после уточнения. Попробуйте ещё раз немного позже.", backToMenuKeyboard())
+	}
+
+	conversation, err := e.conversations.GetConversation(ctx, userID)
+	if err != nil {
+		slog.Error("не удалось восстановить состояние после уточнения", "user_id", userID, "error", err.Error())
+		return e.sendText(ctx, userID, "Не удалось восстановить состояние после уточнения. Попробуйте ещё раз немного позже.", backToMenuKeyboard())
+	}
+
+	if conversation != nil && conversation.ActiveDraft != nil {
+		if acknowledgment != "" {
+			if err := e.sendText(ctx, userID, acknowledgment+" Возвращаем вас к заполнению черновика обращения.", nil); err != nil {
+				return err
+			}
+			if err := e.pauseAfterClarificationAck(ctx); err != nil {
+				return err
+			}
+		}
+		e.restoreDraftFromConversation(session, conversation)
+		session.PreviousStage = ""
+		applyState(session, stateFromConversation(reporting.UserStageFillingReport, conversation.ActiveDraft.Stage))
+		if err := e.hydrateDraftNames(ctx, session); err != nil {
+			slog.Warn("не удалось восстановить названия справочников для черновика после уточнения", "user_id", userID, "error", err.Error())
+		}
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
+		return e.sendCurrentStatePrompt(ctx, userID, session)
+	}
+
+	session.Draft = Draft{}
+	session.Reports = nil
+	session.PreviousStage = ""
+	if acknowledgment != "" {
+		if err := e.sendText(ctx, userID, acknowledgment+" Возвращаем вас в главное меню.", nil); err != nil {
+			return err
+		}
+		if err := e.pauseAfterClarificationAck(ctx); err != nil {
+			return err
+		}
+	}
+	applyState(session, stateMainMenu)
+	if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+		return err
+	}
+	text, attachments := mainMenuMessage()
+	return e.reply(ctx, userID, text, attachments)
+}
+
+func (e *Engine) sendClarificationPrompt(ctx context.Context, userID int64, prompt *reporting.ClarificationPrompt) error {
+	lines := []string{prompt.NotificationText, "", "Напишите ответ сообщением или нажмите «Отклонить ввод ответа»."}
+	return e.sendText(ctx, userID, strings.Join(lines, "\n"), clarificationKeyboard())
+}
+
+func (e *Engine) restoreDraftFromConversation(session *Session, conversation *reporting.ConversationState) {
+	session.Draft = Draft{}
+	session.Reports = nil
+	if conversation == nil || conversation.ActiveDraft == nil {
+		return
+	}
+	session.Draft.CategoryID = conversation.ActiveDraft.CategoryID
+	session.Draft.MunicipalityID = conversation.ActiveDraft.MunicipalityID
+	session.Draft.Phone = conversation.ActiveDraft.Phone
+	session.Draft.Address = conversation.ActiveDraft.Address
+	session.Draft.IncidentTime = conversation.ActiveDraft.IncidentTime
+	session.Draft.Description = conversation.ActiveDraft.Description
+	session.Draft.ExtraInfo = conversation.ActiveDraft.AdditionalInfo
+	session.Draft.AttachmentLog = append([]string(nil), conversation.ActiveDraft.AttachmentLog...)
+	session.Draft.Media = append([]reporting.MediaAttachment(nil), conversation.ActiveDraft.Attachments...)
+}
+
+func (e *Engine) sendCurrentStatePrompt(ctx context.Context, userID int64, session *Session) error {
+	switch session.State {
+	case stateReportCategory:
+		categories, err := e.loadCategories(ctx)
+		if err != nil {
+			return e.sendReferenceLookupError(ctx, userID)
+		}
+		return e.sendText(ctx, userID, categoriesPrompt(categories), backToMenuKeyboard())
+	case stateReportMunicipal:
+		municipalities, err := e.loadMunicipalities(ctx)
+		if err != nil {
+			return e.sendReferenceLookupError(ctx, userID)
+		}
+		return e.sendText(ctx, userID, municipalitiesPrompt(municipalities), backToMenuKeyboard())
+	case stateReportPhone:
+		return e.sendText(ctx, userID, "Введите номер телефона в формате 10 цифр, начиная с 9, или отправьте контакт по кнопке ниже.", phoneKeyboard())
+	case stateReportAddress:
+		return e.sendText(ctx, userID, "Введите адрес или место совершения правонарушения.", backToMenuKeyboard())
+	case stateReportTime:
+		return e.sendText(ctx, userID, "Введите дату, время или период совершения правонарушения. Максимум 100 символов.", backToMenuKeyboard())
+	case stateReportDesc:
+		return e.sendText(ctx, userID, "Опишите суть правонарушения. Максимум 3900 символов.", backToMenuKeyboard())
+	case stateReportMedia:
+		if canSkipMedia(session.Draft) {
+			return e.sendText(ctx, userID, "Отправьте фото/видео или нажмите \"Пропустить\".", mediaKeyboard(true))
+		}
+		return e.sendText(ctx, userID, "Отправьте фото/видео.", mediaKeyboard(false))
+	case stateReportExtra:
+		return e.sendText(ctx, userID, "Напишите дополнительную информацию или нажмите \"Пропустить\".", extraInfoKeyboard())
+	case stateReportConfirm:
+		return e.sendDraftSummary(ctx, userID)
+	default:
+		text, attachments := mainMenuMessage()
+		return e.reply(ctx, userID, text, attachments)
+	}
 }
 
 func (e *Engine) finishDraft(ctx context.Context, userID int64) error {
@@ -642,6 +906,7 @@ func (e *Engine) ensureSessionLoaded(ctx context.Context, userID int64, session 
 	}
 
 	if conversation != nil {
+		session.PreviousStage = conversation.PreviousStage
 		applyState(session, stateFromConversation(conversation.Stage, draftStage(conversation)))
 		if conversation.ActiveDraft != nil {
 			session.Draft.CategoryID = conversation.ActiveDraft.CategoryID
@@ -701,9 +966,10 @@ func (e *Engine) hydrateDraftNames(ctx context.Context, session *Session) error 
 
 func (e *Engine) persistSession(ctx context.Context, userID int64, session *Session, deleteDraft bool) error {
 	req := reporting.SaveConversationRequest{
-		MaxUserID:   userID,
-		UserStage:   session.UserStage,
-		DeleteDraft: deleteDraft,
+		MaxUserID:     userID,
+		UserStage:     session.UserStage,
+		PreviousStage: session.PreviousStage,
+		DeleteDraft:   deleteDraft,
 	}
 	if !deleteDraft && session.MessageStage != reporting.MessageStageUnset {
 		req.ActiveDraft = &reporting.DraftMessage{
@@ -724,9 +990,41 @@ func (e *Engine) persistSession(ctx context.Context, userID int64, session *Sess
 		session.Loaded = true
 		if state != nil {
 			session.HasUserRecord = state.UserID > 0 || state.MaxUserID == userID
+			session.PreviousStage = state.PreviousStage
 		}
 	}
 	return err
+}
+
+func (e *Engine) ensurePreviousStage(session *Session) {
+	if session.PreviousStage != "" && session.PreviousStage != reporting.UserStageWaitingClarification {
+		return
+	}
+
+	switch {
+	case session.MessageStage != reporting.MessageStageUnset || session.Draft.CategoryID > 0 || session.Draft.MunicipalityID > 0:
+		session.PreviousStage = reporting.UserStageFillingReport
+	case len(session.Reports) > 0 || session.State == stateMyReportsList || session.State == stateMyReportDetail:
+		session.PreviousStage = reporting.UserStageViewingMessages
+	default:
+		session.PreviousStage = reporting.UserStageMainMenu
+	}
+}
+
+func (e *Engine) pauseAfterClarificationAck(ctx context.Context) error {
+	if e.ackDelay <= 0 {
+		return nil
+	}
+
+	timer := time.NewTimer(e.ackDelay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (e *Engine) persistStateOrReply(ctx context.Context, userID int64, session *Session, deleteDraft bool) error {

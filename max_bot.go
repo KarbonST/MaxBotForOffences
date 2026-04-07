@@ -63,6 +63,7 @@ func main() {
 	engineOptions = append(engineOptions, scenario.WithReportCreator(reportClient))
 	engineOptions = append(engineOptions, scenario.WithReportReader(reportClient))
 	engineOptions = append(engineOptions, scenario.WithConversationStore(reportClient))
+	engineOptions = append(engineOptions, scenario.WithClarificationStore(reportClient))
 
 	if cfg.ReportPipelineEnabled {
 		if cfg.ReportDatabaseURL == "" {
@@ -107,6 +108,17 @@ func main() {
 
 	engine := scenario.New(client, referenceProvider, engineOptions...)
 	deduper := botruntime.NewDeduper(cfg.DedupTTL)
+	notificationDispatcher := botruntime.NewNotificationDispatcher(
+		reportClient,
+		reportClient,
+		reportClient,
+		client,
+		botruntime.NotificationDispatcherConfig{
+			Interval:  cfg.NotificationPollInterval,
+			BatchSize: cfg.NotificationBatchSize,
+		},
+		logger,
+	)
 
 	updateHandler := func(handlerCtx context.Context, update maxapi.Update) error {
 		if deduper.Seen(update) {
@@ -121,6 +133,12 @@ func main() {
 	} else {
 		slog.Info("бот подключен", "id", info.UserID, "name", info.Name, "username", info.Username)
 	}
+
+	go func() {
+		if err := notificationDispatcher.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("ошибка диспетчера уведомлений", "error", err.Error())
+		}
+	}()
 
 	source := makeSource(cfg, client, logger)
 	if err := source.Run(ctx, updateHandler); err != nil && !errors.Is(err, context.Canceled) {
