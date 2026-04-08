@@ -277,7 +277,7 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 			return err
 		}
 		text, attachments := legalMessage()
-		return e.reply(ctx, userID, text, attachments)
+		return e.replyMarkdown(ctx, userID, text, attachments)
 	case "menu:violations":
 		categories, err := e.loadCategories(ctx)
 		if err != nil {
@@ -295,7 +295,7 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 			return err
 		}
 		text, attachments := consentMessage()
-		return e.reply(ctx, userID, text, attachments)
+		return e.replyMarkdown(ctx, userID, text, attachments)
 	case "menu:my_reports":
 		return e.showMyReportsList(ctx, userID)
 	case "report:consent_yes":
@@ -377,7 +377,7 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 	switch session.State {
 	case stateLegalInfo:
 		text, attachments := legalMessage()
-		return e.sendText(ctx, userID, "В этом разделе используйте кнопки ниже.\n\n"+text, attachments)
+		return e.sendTextMarkdown(ctx, userID, "В этом разделе используйте кнопки ниже.\n\n"+text, attachments)
 	case stateViolationsList:
 		categories, err := e.loadCategories(ctx)
 		if err != nil {
@@ -387,7 +387,7 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		return e.sendText(ctx, userID, "В этом разделе используйте кнопки ниже.\n\n"+text, attachments)
 	case stateReportConsent:
 		text, attachments := consentMessage()
-		return e.sendText(ctx, userID, "Для продолжения используйте кнопки ниже.\n\n"+text, attachments)
+		return e.sendTextMarkdown(ctx, userID, "Для продолжения используйте кнопки ниже.\n\n"+text, attachments)
 	case stateMyReportsList:
 		if len(session.Reports) == 0 {
 			return e.sendText(ctx, userID, "Список обращений устарел. Вернитесь в начало и откройте раздел снова.", myReportsKeyboard())
@@ -873,14 +873,30 @@ func (e *Engine) sendDraftSummary(ctx context.Context, userID int64) error {
 }
 
 func (e *Engine) reply(ctx context.Context, userID int64, text string, attachments []maxapi.AttachmentRequest) error {
-	return e.sendText(ctx, userID, text, attachments)
+	return e.sendTextWithFormat(ctx, userID, text, attachments, "")
 }
 
 func (e *Engine) sendText(ctx context.Context, userID int64, text string, attachments []maxapi.AttachmentRequest) error {
-	return e.client.SendMessage(ctx, userID, maxapi.NewMessageBody{
+	return e.sendTextWithFormat(ctx, userID, text, attachments, "")
+}
+
+func (e *Engine) replyMarkdown(ctx context.Context, userID int64, text string, attachments []maxapi.AttachmentRequest) error {
+	return e.sendTextWithFormat(ctx, userID, text, attachments, "markdown")
+}
+
+func (e *Engine) sendTextMarkdown(ctx context.Context, userID int64, text string, attachments []maxapi.AttachmentRequest) error {
+	return e.sendTextWithFormat(ctx, userID, text, attachments, "markdown")
+}
+
+func (e *Engine) sendTextWithFormat(ctx context.Context, userID int64, text string, attachments []maxapi.AttachmentRequest, format string) error {
+	body := maxapi.NewMessageBody{
 		Text:        text,
 		Attachments: attachments,
-	})
+	}
+	if strings.TrimSpace(format) != "" {
+		body.Format = format
+	}
+	return e.client.SendMessage(ctx, userID, body)
 }
 
 func (e *Engine) loadCategories(ctx context.Context) ([]reference.Item, error) {

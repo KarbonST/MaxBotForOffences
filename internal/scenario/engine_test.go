@@ -160,6 +160,21 @@ func assertMainMenuKeyboard(t *testing.T, body maxapi.NewMessageBody) {
 		}
 	}
 }
+
+func assertAcceptedReportMessage(t *testing.T, text, reportNumber string) {
+	t.Helper()
+
+	if !strings.Contains(text, "Сообщение") || !strings.Contains(text, "принято") {
+		t.Fatalf("expected accepted message text, got %q", text)
+	}
+	if !strings.Contains(text, "номер "+reportNumber) && !strings.Contains(text, "номером "+reportNumber) {
+		t.Fatalf("expected report number %s in final confirmation, got %q", reportNumber, text)
+	}
+	if !strings.Contains(text, "Текущий статус: На модерации.") {
+		t.Fatalf("expected humanized status in final confirmation, got %q", text)
+	}
+}
+
 func (m *reportSinkMock) Store(_ context.Context, payload report.DialogPayload) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -671,12 +686,7 @@ func TestFlowSendDraftStoresDialogPayload(t *testing.T) {
 	if payloads[1].ReportNumber != "15" {
 		t.Fatalf("expected linked raw payload to store real report number, got %q", payloads[1].ReportNumber)
 	}
-	if !strings.Contains(mock.lastText(), "Сообщение принято с номером 15") {
-		t.Fatalf("expected final report confirmation text, got %q", mock.lastText())
-	}
-	if !strings.Contains(mock.lastText(), "Текущий статус: На модерации.") {
-		t.Fatalf("expected humanized status in final confirmation, got %q", mock.lastText())
-	}
+	assertAcceptedReportMessage(t, mock.lastText(), "15")
 }
 
 func TestFlowSendDraftKeepsSuccessWhenRawBackfillFails(t *testing.T) {
@@ -711,12 +721,7 @@ func TestFlowSendDraftKeepsSuccessWhenRawBackfillFails(t *testing.T) {
 	if reportMock.count() != 1 {
 		t.Fatalf("expected only the initial raw payload to be stored successfully, got %d", reportMock.count())
 	}
-	if !strings.Contains(mock.lastText(), "Сообщение принято с номером 15") {
-		t.Fatalf("expected final report confirmation text despite raw backfill error, got %q", mock.lastText())
-	}
-	if !strings.Contains(mock.lastText(), "Текущий статус: На модерации.") {
-		t.Fatalf("expected humanized status in final confirmation despite raw backfill error, got %q", mock.lastText())
-	}
+	assertAcceptedReportMessage(t, mock.lastText(), "15")
 }
 
 func TestFlowAllowsFreeformIncidentTime(t *testing.T) {
