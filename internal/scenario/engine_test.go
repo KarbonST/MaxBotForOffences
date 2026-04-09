@@ -549,8 +549,14 @@ func TestLegalInfoMatchesSpecTextAndButtons(t *testing.T) {
 		t.Fatalf("expected detailed legal text, got %q", last.Text)
 	}
 	payload := inlineKeyboardPayload(t, last)
-	if len(payload.Buttons) != 5 {
-		t.Fatalf("expected main menu keyboard after legal info, got %+v", payload.Buttons)
+	if len(payload.Buttons) != 2 {
+		t.Fatalf("expected legal info keyboard (2 rows), got %+v", payload.Buttons)
+	}
+	if payload.Buttons[0][0].Text != "Вернуться в начало" || payload.Buttons[0][0].Payload != "menu:main" {
+		t.Fatalf("unexpected first legal button: %+v", payload.Buttons[0][0])
+	}
+	if payload.Buttons[1][0].Text != "Сообщить о нарушении" || payload.Buttons[1][0].Payload != "menu:report" {
+		t.Fatalf("unexpected second legal button: %+v", payload.Buttons[1][0])
 	}
 	session := engine.session(userID)
 	if session.State != stateMainMenu {
@@ -582,8 +588,14 @@ func TestViolationsListMatchesSpecButtons(t *testing.T) {
 
 	last := mock.lastMessage()
 	payload := inlineKeyboardPayload(t, last)
-	if len(payload.Buttons) != 5 {
-		t.Fatalf("expected main menu keyboard after violations list, got %+v", payload.Buttons)
+	if len(payload.Buttons) != 2 {
+		t.Fatalf("expected violations keyboard (2 rows), got %+v", payload.Buttons)
+	}
+	if payload.Buttons[0][0].Text != "Вернуться в начало" || payload.Buttons[0][0].Payload != "menu:main" {
+		t.Fatalf("unexpected first violations button: %+v", payload.Buttons[0][0])
+	}
+	if payload.Buttons[1][0].Text != "Сообщить о нарушении" || payload.Buttons[1][0].Payload != "menu:report" {
+		t.Fatalf("unexpected second violations button: %+v", payload.Buttons[1][0])
 	}
 	session := engine.session(userID)
 	if session.State != stateMainMenu {

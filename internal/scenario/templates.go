@@ -13,12 +13,12 @@ import (
 var userFacingLocation = loadUserFacingLocation()
 
 const (
-	personalDataLawURL = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/Федеральный%20закон%20от%2027.07.2006%20N%20152-ФЗ%20%28ред.%20от%2024.06.2025.docx"
-	regionalCodeURL    = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/Закон%20Волгоградской%20области%20от%2011.06.2008%20N%201693-ОД%20.docx"
-	commissionsLawURL  = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/Закон%20Волгоградской%20области%20от%2002.12.2008%20N%201789-ОД.docx"
-	powersLawURL       = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/Закон%20Волгоградской%20области%20от%2002.12.2008%20N%201792-ОД.docx"
-	userAgreementURL   = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/Пользовательское%20соглашение.docx"
-	privacyPolicyURL   = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/Соглашение%20о%20конфиденциальности%20на%20сайт.docx"
+	personalDataLawURL = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/%D0%A4%D0%B5%D0%B4%D0%B5%D1%80%D0%B0%D0%BB%D1%8C%D0%BD%D1%8B%D0%B9%20%D0%B7%D0%B0%D0%BA%D0%BE%D0%BD%20%D0%BE%D1%82%2027.07.2006%20N%20152-%D0%A4%D0%97%20%28%D1%80%D0%B5%D0%B4.%20%D0%BE%D1%82%2024.06.2025.docx"
+	regionalCodeURL    = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/%D0%97%D0%B0%D0%BA%D0%BE%D0%BD%20%D0%92%D0%BE%D0%BB%D0%B3%D0%BE%D0%B3%D1%80%D0%B0%D0%B4%D1%81%D0%BA%D0%BE%D0%B9%20%D0%BE%D0%B1%D0%BB%D0%B0%D1%81%D1%82%D0%B8%20%D0%BE%D1%82%2011.06.2008%20N%201693-%D0%9E%D0%94%20.docx"
+	commissionsLawURL  = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/%D0%97%D0%B0%D0%BA%D0%BE%D0%BD%20%D0%92%D0%BE%D0%BB%D0%B3%D0%BE%D0%B3%D1%80%D0%B0%D0%B4%D1%81%D0%BA%D0%BE%D0%B9%20%D0%BE%D0%B1%D0%BB%D0%B0%D1%81%D1%82%D0%B8%20%D0%BE%D1%82%2002.12.2008%20N%201789-%D0%9E%D0%94.docx"
+	powersLawURL       = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/%D0%97%D0%B0%D0%BA%D0%BE%D0%BD%20%D0%92%D0%BE%D0%BB%D0%B3%D0%BE%D0%B3%D1%80%D0%B0%D0%B4%D1%81%D0%BA%D0%BE%D0%B9%20%D0%BE%D0%B1%D0%BB%D0%B0%D1%81%D1%82%D0%B8%20%D0%BE%D1%82%2002.12.2008%20N%201792-%D0%9E%D0%94.docx"
+	userAgreementURL   = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/%D0%9F%D0%BE%D0%BB%D1%8C%D0%B7%D0%BE%D0%B2%D0%B0%D1%82%D0%B5%D0%BB%D1%8C%D1%81%D0%BA%D0%BE%D0%B5%20%D1%81%D0%BE%D0%B3%D0%BB%D0%B0%D1%88%D0%B5%D0%BD%D0%B8%D0%B5.docx"
+	privacyPolicyURL   = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/%D0%A1%D0%BE%D0%B3%D0%BB%D0%B0%D1%88%D0%B5%D0%BD%D0%B8%D0%B5%20%D0%BE%20%D0%BA%D0%BE%D0%BD%D1%84%D0%B8%D0%B4%D0%B5%D0%BD%D1%86%D0%B8%D0%B0%D0%BB%D1%8C%D0%BD%D0%BE%D1%81%D1%82%D0%B8%20%D0%BD%D0%B0%20%D1%81%D0%B0%D0%B9%D1%82.docx"
 )
 
 func mainMenuMessage() (string, []maxapi.AttachmentRequest) {
@@ -40,12 +40,12 @@ func unsupportedInputMessage() (string, []maxapi.AttachmentRequest) {
 func legalAndConsentText() string {
 	return strings.Join([]string{
 		"Продолжая использование бота, вы выражаете согласие с требованиями к сообщениям и следующими документами:",
-		"1. [Федеральный закон от 27.07.2006 № 152-ФЗ \"О персональных данных\"](" + personalDataLawURL + ");",
-		"2. [Закон Волгоградской области от 11.06.2008 № 1693-ОД \"Кодекс Волгоградской области об административной ответственности\"](" + regionalCodeURL + ");",
-		"3. [Закон Волгоградской области от 02.12.2008 № 1789-ОД \"Об административных комиссиях\"](" + commissionsLawURL + ");",
-		"4. [Закон Волгоградской области от 02.12.2008 № 1792-ОД \"О наделении органов местного самоуправления муниципальных образований в Волгоградской области государственными полномочиями по организационному обеспечению деятельности территориальных административных комиссий\"](" + powersLawURL + ");",
-		"5. [Пользовательское соглашение при использовании чат-бота по аккумулированию информации об административных правонарушениях в мессенджере \"MAX\"](" + userAgreementURL + ");",
-		"6. [Соглашение о конфиденциальности при использовании чат-бота по аккумулированию информации об административных правонарушениях в мессенджере \"MAX\"](" + privacyPolicyURL + ").",
+		"1. " + mdLink("Федеральный закон от 27.07.2006 № 152-ФЗ \"О персональных данных\"", personalDataLawURL) + ";",
+		"2. " + mdLink("Закон Волгоградской области от 11.06.2008 № 1693-ОД \"Кодекс Волгоградской области об административной ответственности\"", regionalCodeURL) + ";",
+		"3. " + mdLink("Закон Волгоградской области от 02.12.2008 № 1789-ОД \"Об административных комиссиях\"", commissionsLawURL) + ";",
+		"4. " + mdLink("Закон Волгоградской области от 02.12.2008 № 1792-ОД \"О наделении органов местного самоуправления муниципальных образований в Волгоградской области государственными полномочиями по организационному обеспечению деятельности территориальных административных комиссий\"", powersLawURL) + ";",
+		"5. " + mdLink("Пользовательское соглашение при использовании чат-бота по аккумулированию информации об административных правонарушениях в мессенджере \"MAX\"", userAgreementURL) + ";",
+		"6. " + mdLink("Соглашение о конфиденциальности при использовании чат-бота по аккумулированию информации об административных правонарушениях в мессенджере \"MAX\"", privacyPolicyURL) + ".",
 		"",
 		"Требования к сообщениям",
 		"В сообщении гражданин излагает суть сообщения. Сообщение должно быть адресовано в конкретное муниципальное образование с указанием вида нарушения. К сообщению приобщаются фото и видео файлы.",
@@ -57,8 +57,12 @@ func legalAndConsentText() string {
 	}, "\n")
 }
 
+func mdLink(text, url string) string {
+	return "[" + text + "](<" + url + ">)"
+}
+
 func legalMessage() (string, []maxapi.AttachmentRequest) {
-	return legalAndConsentText(), mainMenuKeyboard()
+	return legalAndConsentText(), legalInfoKeyboard()
 }
 
 func violationsMessage(items []reference.Item) (string, []maxapi.AttachmentRequest) {
@@ -66,7 +70,7 @@ func violationsMessage(items []reference.Item) (string, []maxapi.AttachmentReque
 	for i, item := range items {
 		lines = append(lines, fmt.Sprintf("%d. %s", i+1, item.Name))
 	}
-	return strings.Join(lines, "\n"), mainMenuKeyboard()
+	return strings.Join(lines, "\n"), violationsKeyboard()
 }
 
 func consentMessage() (string, []maxapi.AttachmentRequest) {
@@ -133,7 +137,24 @@ func confirmKeyboard() []maxapi.AttachmentRequest {
 	return []maxapi.AttachmentRequest{
 		inlineKeyboard(
 			row(cb("Отправить", "report:send"), cb("Отменить", "report:cancel")),
+		),
+	}
+}
+
+func legalInfoKeyboard() []maxapi.AttachmentRequest {
+	return []maxapi.AttachmentRequest{
+		inlineKeyboard(
 			row(cb("Вернуться в начало", "menu:main")),
+			row(cb("Сообщить о нарушении", "menu:report")),
+		),
+	}
+}
+
+func violationsKeyboard() []maxapi.AttachmentRequest {
+	return []maxapi.AttachmentRequest{
+		inlineKeyboard(
+			row(cb("Вернуться в начало", "menu:main")),
+			row(cb("Сообщить о нарушении", "menu:report")),
 		),
 	}
 }
