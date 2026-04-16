@@ -51,7 +51,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.CoreAPIBaseURL != "http://127.0.0.1:8091" {
 		t.Fatalf("unexpected core api base: %q", cfg.CoreAPIBaseURL)
 	}
-	if cfg.CoreAPITimeout != 5*time.Second {
+	if cfg.CoreAPITimeout != 30*time.Second {
 		t.Fatalf("unexpected core api timeout: %v", cfg.CoreAPITimeout)
 	}
 	if !cfg.ReportPipelineEnabled {

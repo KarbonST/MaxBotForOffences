@@ -62,7 +62,7 @@ func Load() (Config, error) {
 		ReferenceAPITimeout:   getenvDuration("REFERENCE_API_TIMEOUT", 5*time.Second),
 		ReferenceCacheTTL:     getenvDuration("REFERENCE_CACHE_TTL", 5*time.Minute),
 		CoreAPIBaseURL:        getenv("CORE_API_BASE", "http://127.0.0.1:8091"),
-		CoreAPITimeout:        getenvDuration("CORE_API_TIMEOUT", 5*time.Second),
+		CoreAPITimeout:        getenvDuration("CORE_API_TIMEOUT", 30*time.Second),
 		ReportPipelineEnabled: getenvBool("REPORT_PIPELINE_ENABLED", true),
 		ReportDatabaseURL:     strings.TrimSpace(getenv("REPORT_DATABASE_URL", os.Getenv("DATABASE_URL"))),
 		ReportOutboxDir:       getenv("REPORT_OUTBOX_DIR", "var/report_outbox"),
@@ -161,7 +161,7 @@ func Load() (Config, error) {
 		cfg.ReferenceCacheTTL = 5 * time.Minute
 	}
 	if cfg.CoreAPITimeout <= 0 {
-		cfg.CoreAPITimeout = 5 * time.Second
+		cfg.CoreAPITimeout = 30 * time.Second
 	}
 	if cfg.ReportOutboxQueueSize < 1 {
 		cfg.ReportOutboxQueueSize = 256

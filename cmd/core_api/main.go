@@ -48,8 +48,8 @@ func main() {
 	defer referenceStore.Close()
 
 	addr := getenv("CORE_API_ADDR", ":8091")
-	readTimeout := getenvDuration("CORE_API_READ_TIMEOUT", 5*time.Second)
-	writeTimeout := getenvDuration("CORE_API_WRITE_TIMEOUT", 5*time.Second)
+	readTimeout := getenvDuration("CORE_API_READ_TIMEOUT", 30*time.Second)
+	writeTimeout := getenvDuration("CORE_API_WRITE_TIMEOUT", 60*time.Second)
 	shutdownTimeout := getenvDuration("CORE_API_SHUTDOWN_TIMEOUT", 10*time.Second)
 
 	server := &http.Server{
