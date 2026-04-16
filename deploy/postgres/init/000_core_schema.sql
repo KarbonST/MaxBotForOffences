@@ -1,6 +1,6 @@
--- Основа схемы приведена к присланному ТЗ / БД.
--- Здесь оставлена целевая доменная модель users/messages/files/...,
--- а техническая raw-таблица dialog_reports идёт отдельным init-файлом.
+-- Основа схемы приведена к актуальной версии БД (2026-04-14.sql).
+-- Наполнение справочников (категории и муниципалитеты) находится в 001_reference_schema.sql.
+-- Техническая raw-таблица dialog_reports вынесена в 002_dialog_reports.sql.
 
 DO $$
 BEGIN
@@ -108,11 +108,21 @@ CREATE TABLE IF NOT EXISTS admins (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id SERIAL PRIMARY KEY,
+    admin_id INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+    token_hash VARCHAR(255) NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW(),
+    revoked BOOLEAN DEFAULT FALSE,
+    UNIQUE(token_hash)
+);
+
 CREATE TABLE IF NOT EXISTS messages (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    category_id INTEGER REFERENCES categories(id) ON DELETE RESTRICT,
-    municipality_id INTEGER REFERENCES municipalities(id) ON DELETE RESTRICT,
+    category_id INTEGER,
+    municipality_id INTEGER,
     status message_status NOT NULL DEFAULT 'draft',
     phone TEXT,
     address TEXT,
@@ -141,30 +151,21 @@ CREATE TABLE IF NOT EXISTS messages (
     )
 );
 
-CREATE TABLE IF NOT EXISTS user_notifications (
-    id SERIAL PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    notification TEXT NOT NULL,
-    status notification_status NOT NULL DEFAULT 'new',
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    sended_at TIMESTAMP
-);
-
 CREATE TABLE IF NOT EXISTS messages_history (
     id SERIAL PRIMARY KEY,
-    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-    admin_id INTEGER REFERENCES admins(id) ON DELETE SET NULL,
+    message_id INTEGER NOT NULL,
+    admin_id INTEGER,
     date TIMESTAMP NOT NULL DEFAULT NOW(),
     event_type history_event_type NOT NULL,
-    new_value TEXT NOT NULL,
-    notification_id INTEGER REFERENCES user_notifications(id) ON DELETE SET NULL,
-    comments TEXT,
+    value JSONB NOT NULL,
+    notification_id INTEGER,
+    comment TEXT,
     created_at TIMESTAMP DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS files (
     id SERIAL PRIMARY KEY,
-    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    message_id INTEGER NOT NULL,
     path TEXT NOT NULL,
     file_name TEXT,
     file_size INTEGER,
@@ -172,23 +173,81 @@ CREATE TABLE IF NOT EXISTS files (
     created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS draft_attachments (
-    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
-    attachment_log JSONB NOT NULL DEFAULT '[]'::jsonb,
-    attachments JSONB NOT NULL DEFAULT '[]'::jsonb,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
 CREATE TABLE IF NOT EXISTS clarification_requests (
     id SERIAL PRIMARY KEY,
-    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-    admin_id INTEGER NOT NULL REFERENCES admins(id) ON DELETE SET NULL,
+    message_id INTEGER NOT NULL,
+    admin_id INTEGER NOT NULL,
     answer TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP,
     status request_status DEFAULT 'new'
 );
+
+CREATE TABLE IF NOT EXISTS user_notifications (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    notification TEXT NOT NULL,
+    status notification_status NOT NULL DEFAULT 'new',
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    sended_at TIMESTAMP
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_messages_category') THEN
+        ALTER TABLE messages
+            ADD CONSTRAINT fk_messages_category
+            FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE RESTRICT;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_messages_municipality') THEN
+        ALTER TABLE messages
+            ADD CONSTRAINT fk_messages_municipality
+            FOREIGN KEY (municipality_id) REFERENCES municipalities(id) ON DELETE RESTRICT;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_history_message') THEN
+        ALTER TABLE messages_history
+            ADD CONSTRAINT fk_history_message
+            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_history_admin') THEN
+        ALTER TABLE messages_history
+            ADD CONSTRAINT fk_history_admin
+            FOREIGN KEY (admin_id) REFERENCES admins(id) ON DELETE SET NULL;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_history_notification') THEN
+        ALTER TABLE messages_history
+            ADD CONSTRAINT fk_history_notification
+            FOREIGN KEY (notification_id) REFERENCES user_notifications(id) ON DELETE SET NULL;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_files_message') THEN
+        ALTER TABLE files
+            ADD CONSTRAINT fk_files_message
+            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_clarification_message') THEN
+        ALTER TABLE clarification_requests
+            ADD CONSTRAINT fk_clarification_message
+            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_clarification_admin') THEN
+        ALTER TABLE clarification_requests
+            ADD CONSTRAINT fk_clarification_admin
+            FOREIGN KEY (admin_id) REFERENCES admins(id) ON DELETE RESTRICT;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_notifications_user') THEN
+        ALTER TABLE user_notifications
+            ADD CONSTRAINT fk_notifications_user
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_users_max_id ON users(max_id);
 CREATE INDEX IF NOT EXISTS idx_users_stage ON users(stage);
@@ -204,7 +263,6 @@ CREATE INDEX IF NOT EXISTS idx_history_admin ON messages_history(admin_id);
 CREATE INDEX IF NOT EXISTS idx_history_notification ON messages_history(notification_id);
 
 CREATE INDEX IF NOT EXISTS idx_files_message ON files(message_id);
-CREATE INDEX IF NOT EXISTS idx_draft_attachments_updated_at ON draft_attachments(updated_at);
 
 CREATE INDEX IF NOT EXISTS idx_clarification_message ON clarification_requests(message_id);
 CREATE INDEX IF NOT EXISTS idx_clarification_status ON clarification_requests(status);
@@ -216,6 +274,9 @@ CREATE INDEX IF NOT EXISTS idx_categories_sorting ON categories(sorting);
 CREATE INDEX IF NOT EXISTS idx_municipalities_sorting ON municipalities(sorting);
 CREATE INDEX IF NOT EXISTS idx_categories_active ON categories(is_active);
 CREATE INDEX IF NOT EXISTS idx_municipalities_active ON municipalities(is_active);
+
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_admin_id ON refresh_tokens(admin_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_at ON refresh_tokens(expires_at);
 
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
@@ -240,12 +301,6 @@ CREATE TRIGGER update_messages_updated_at
 DROP TRIGGER IF EXISTS update_admins_updated_at ON admins;
 CREATE TRIGGER update_admins_updated_at
     BEFORE UPDATE ON admins
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
-
-DROP TRIGGER IF EXISTS update_draft_attachments_updated_at ON draft_attachments;
-CREATE TRIGGER update_draft_attachments_updated_at
-    BEFORE UPDATE ON draft_attachments
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 

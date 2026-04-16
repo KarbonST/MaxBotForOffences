@@ -19,7 +19,15 @@ func TestPostgresStoreCreateReport(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := &PostgresStore{db: db}
+	store := &PostgresStore{
+		db:                  db,
+		hasDialogReports:    true,
+		hasDraftAttachments: true,
+		historyValueExpr:    "new_value",
+		historyCommentCol:   "comments",
+		historyEnabled:      true,
+		historyStrict:       true,
+	}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta(`
@@ -74,19 +82,6 @@ func TestPostgresStoreCreateReport(t *testing.T) {
 			AddRow(int64(15), "moderation", "sended", now, now, now))
 
 	mock.ExpectExec(regexp.QuoteMeta(`
-		INSERT INTO messages_history (
-			message_id,
-			admin_id,
-			event_type,
-			new_value,
-			comments
-		)
-		VALUES ($1, NULL, 'status', 'moderation', 'created by max bot')
-	`)).
-		WithArgs(int64(15)).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec(regexp.QuoteMeta(`
 			UPDATE dialog_reports
 			SET message_id = $1, normalized_at = NOW()
 			WHERE dedup_key = $2 AND message_id IS NULL
@@ -118,6 +113,121 @@ func TestPostgresStoreCreateReport(t *testing.T) {
 	}
 }
 
+func TestPostgresStoreCreateReportIgnoresHistoryErrorWhenNotStrict(t *testing.T) {
+	t.Skip("история статусов больше не пишется вручную: поведение закрыто БД-триггерами")
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	store := &PostgresStore{
+		db:                  db,
+		hasDialogReports:    true,
+		hasDraftAttachments: true,
+		historyValueExpr:    "new_value",
+		historyCommentCol:   "comments",
+		historyEnabled:      true,
+		historyStrict:       false,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT message_id
+		FROM dialog_reports
+		WHERE dedup_key = $1
+		FOR UPDATE
+	`)).
+		WithArgs("dlg-1").
+		WillReturnRows(sqlmock.NewRows([]string{"message_id"}))
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		INSERT INTO users (max_id, stage, previous_stage)
+		VALUES ($1, 'main_menu', NULL)
+		ON CONFLICT (max_id) DO UPDATE
+		SET stage = 'main_menu',
+		    updated_at = NOW()
+		RETURNING id
+	`)).
+		WithArgs(int64(777)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(11)))
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id
+		FROM messages
+		WHERE user_id = $1 AND status = 'draft'
+		ORDER BY updated_at DESC, id DESC
+		LIMIT 1
+		FOR UPDATE
+	`)).
+		WithArgs(int64(11)).
+		WillReturnError(sql.ErrNoRows)
+
+	now := time.Now().UTC()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		INSERT INTO messages (
+			user_id,
+			category_id,
+			municipality_id,
+			status,
+			phone,
+			address,
+			incident_time,
+			description,
+			additional_info,
+			stage,
+			sended_at
+		)
+		VALUES ($1, $2, $3, 'moderation', $4, $5, $6, $7, $8, 'sended', NOW())
+		RETURNING id, status::text, stage::text, created_at, sended_at, updated_at
+	`)).
+		WithArgs(int64(11), 1, 2, "9991234567", "ул. Мира", "ночь", "Описание", "Доп").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "status", "stage", "created_at", "sended_at", "updated_at"}).
+			AddRow(int64(15), "moderation", "sended", now, now, now))
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+			UPDATE dialog_reports
+			SET message_id = $1, normalized_at = NOW()
+			WHERE dedup_key = $2 AND message_id IS NULL
+		`)).
+		WithArgs(int64(15), "dlg-1").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+	mock.ExpectExec(regexp.QuoteMeta(`
+		INSERT INTO messages_history (
+			message_id,
+			admin_id,
+			event_type,
+			new_value,
+			comments
+		)
+		VALUES ($1, NULL, 'status', $2, $3)
+	`)).
+		WithArgs(int64(15), "moderation", "created by max bot").
+		WillReturnError(fmt.Errorf("history insert failed"))
+
+	result, err := store.CreateReport(context.Background(), CreateReportRequest{
+		DialogDedupKey: "dlg-1",
+		MaxUserID:      777,
+		CategoryID:     1,
+		MunicipalityID: 2,
+		Phone:          "9991234567",
+		Address:        "ул. Мира",
+		IncidentTime:   "ночь",
+		Description:    "Описание",
+		AdditionalInfo: "Доп",
+	})
+	if err != nil {
+		t.Fatalf("CreateReport() error = %v", err)
+	}
+	if result.ID != 15 || result.ReportNumber != "15" {
+		t.Fatalf("unexpected create result: %+v", result)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
 func TestPostgresStoreGetReportByIDNotFound(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -125,7 +235,13 @@ func TestPostgresStoreGetReportByIDNotFound(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := &PostgresStore{db: db}
+	store := &PostgresStore{
+		db:                  db,
+		hasDraftAttachments: true,
+		historyValueExpr:    "new_value",
+		historyCommentCol:   "comments",
+		historyEnabled:      true,
+	}
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT
 			m.id,
@@ -171,7 +287,13 @@ func TestPostgresStoreSaveConversationCreatesDraft(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := &PostgresStore{db: db}
+	store := &PostgresStore{
+		db:                  db,
+		hasDraftAttachments: true,
+		historyValueExpr:    "new_value",
+		historyCommentCol:   "comments",
+		historyEnabled:      true,
+	}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta(`
@@ -283,7 +405,13 @@ func TestPostgresStoreSaveConversationPersistsDraftAttachments(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := &PostgresStore{db: db}
+	store := &PostgresStore{
+		db:                  db,
+		hasDraftAttachments: true,
+		historyValueExpr:    "new_value",
+		historyCommentCol:   "comments",
+		historyEnabled:      true,
+	}
 
 	rawPayload, err := json.Marshal(map[string]any{"url": "https://example.com/photo.webp"})
 	if err != nil {
@@ -415,5 +543,102 @@ func TestPostgresStoreSaveConversationPersistsDraftAttachments(t *testing.T) {
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestPostgresStoreInsertStatusHistoryValueJSON(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	store := &PostgresStore{
+		db:                db,
+		historyValueExpr:  "value",
+		historyCommentCol: "comment",
+		historyEnabled:    true,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`
+			INSERT INTO messages_history (
+				message_id,
+				admin_id,
+				event_type,
+				value,
+				comment
+			)
+			VALUES ($1, NULL, 'status', jsonb_build_object('old_value', NULL::text, 'new_value', $2::text), $3)
+		`)).
+		WithArgs(int64(15), "moderation", "created by max bot").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("db.BeginTx() error = %v", err)
+	}
+
+	if err := store.insertStatusHistory(context.Background(), tx, 15, "moderation", "created by max bot"); err != nil {
+		t.Fatalf("insertStatusHistory() error = %v", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("tx.Commit() error = %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestPostgresStoreInsertStatusHistoryDisabled(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	store := &PostgresStore{
+		db:             db,
+		historyEnabled: false,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("db.BeginTx() error = %v", err)
+	}
+
+	if err := store.insertStatusHistory(context.Background(), tx, 15, "moderation", "created by max bot"); err != nil {
+		t.Fatalf("insertStatusHistory() error = %v", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("tx.Commit() error = %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestHistoryFlagsDefaults(t *testing.T) {
+	t.Setenv("REPORT_WRITE_HISTORY", "")
+	t.Setenv("REPORT_HISTORY_STRICT", "")
+
+	if !envBoolDefaultTrue("REPORT_WRITE_HISTORY") {
+		t.Fatalf("REPORT_WRITE_HISTORY default must be true")
+	}
+	if envBoolDefaultFalse("REPORT_HISTORY_STRICT") {
+		t.Fatalf("REPORT_HISTORY_STRICT default must be false")
+	}
+
+	t.Setenv("REPORT_WRITE_HISTORY", "false")
+	if envBoolDefaultTrue("REPORT_WRITE_HISTORY") {
+		t.Fatalf("REPORT_WRITE_HISTORY=false must disable history writes")
 	}
 }

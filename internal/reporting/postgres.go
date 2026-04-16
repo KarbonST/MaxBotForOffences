@@ -18,9 +18,15 @@ import (
 )
 
 type PostgresStore struct {
-	db           *sql.DB
-	mediaRootDir string
-	mediaFetcher *mediaFetcher
+	db                  *sql.DB
+	mediaRootDir        string
+	mediaFetcher        *mediaFetcher
+	hasDraftAttachments bool
+	hasDialogReports    bool
+	historyValueExpr    string
+	historyCommentCol   string
+	historyEnabled      bool
+	historyStrict       bool
 }
 
 const defaultMediaRootDir = "/var/www/violations-upload"
@@ -48,15 +54,127 @@ func NewPostgresStore(dsn string) (*PostgresStore, error) {
 		mediaRootDir = defaultMediaRootDir
 	}
 
-	return &PostgresStore{
-		db:           db,
-		mediaRootDir: mediaRootDir,
-		mediaFetcher: newMediaFetcherFromEnv(),
-	}, nil
+	store := &PostgresStore{
+		db:             db,
+		mediaRootDir:   mediaRootDir,
+		mediaFetcher:   newMediaFetcherFromEnv(),
+		historyEnabled: envBoolDefaultTrue("REPORT_WRITE_HISTORY"),
+		historyStrict:  envBoolDefaultFalse("REPORT_HISTORY_STRICT"),
+	}
+	if err := store.detectSchema(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
+	return store, nil
 }
 
 func (s *PostgresStore) Close() error {
 	return s.db.Close()
+}
+
+func (s *PostgresStore) detectSchema(ctx context.Context) error {
+	hasDraftAttachments, err := tableExists(ctx, s.db, "draft_attachments")
+	if err != nil {
+		return fmt.Errorf("detect draft_attachments table: %w", err)
+	}
+	hasDialogReports, err := tableExists(ctx, s.db, "dialog_reports")
+	if err != nil {
+		return fmt.Errorf("detect dialog_reports table: %w", err)
+	}
+	hasNewValue, err := columnExists(ctx, s.db, "messages_history", "new_value")
+	if err != nil {
+		return fmt.Errorf("detect messages_history.new_value: %w", err)
+	}
+	hasValueJSON, err := columnExists(ctx, s.db, "messages_history", "value")
+	if err != nil {
+		return fmt.Errorf("detect messages_history.value: %w", err)
+	}
+	hasComments, err := columnExists(ctx, s.db, "messages_history", "comments")
+	if err != nil {
+		return fmt.Errorf("detect messages_history.comments: %w", err)
+	}
+	hasComment, err := columnExists(ctx, s.db, "messages_history", "comment")
+	if err != nil {
+		return fmt.Errorf("detect messages_history.comment: %w", err)
+	}
+
+	s.hasDraftAttachments = hasDraftAttachments
+	s.hasDialogReports = hasDialogReports
+
+	if !s.historyEnabled {
+		return nil
+	}
+
+	switch {
+	case hasNewValue:
+		s.historyValueExpr = "new_value"
+	case hasValueJSON:
+		s.historyValueExpr = "value"
+	default:
+		return fmt.Errorf("messages_history must contain either new_value or value column")
+	}
+
+	switch {
+	case hasComments:
+		s.historyCommentCol = "comments"
+	case hasComment:
+		s.historyCommentCol = "comment"
+	default:
+		s.historyCommentCol = ""
+	}
+
+	return nil
+}
+
+func tableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
+	var exists bool
+	err := db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.tables
+			WHERE table_schema = 'public' AND table_name = $1
+		)
+	`, table).Scan(&exists)
+	return exists, err
+}
+
+func columnExists(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+	var exists bool
+	err := db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
+		)
+	`, table, column).Scan(&exists)
+	return exists, err
+}
+
+func (s *PostgresStore) insertStatusHistory(ctx context.Context, tx *sql.Tx, messageID int64, status string, comment string) error {
+	if !s.historyEnabled {
+		return nil
+	}
+
+	query, args, err := s.buildStatusHistoryInsert(messageID, status, comment)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("insert message history: %w", err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) insertStatusHistoryBestEffort(ctx context.Context, messageID int64, status string, comment string) {
+	if !s.historyEnabled {
+		return
+	}
+	query, args, err := s.buildStatusHistoryInsert(messageID, status, comment)
+	if err != nil {
+		return
+	}
+	_, _ = s.db.ExecContext(ctx, query, args...)
 }
 
 func (s *PostgresStore) CreateReport(ctx context.Context, req CreateReportRequest) (*CreatedReport, error) {
@@ -68,7 +186,7 @@ func (s *PostgresStore) CreateReport(ctx context.Context, req CreateReportReques
 		_ = tx.Rollback()
 	}()
 
-	if req.DialogDedupKey != "" {
+	if req.DialogDedupKey != "" && s.hasDialogReports {
 		existing, err := s.findCreatedReportByDialogKey(ctx, tx, req.DialogDedupKey)
 		if err != nil {
 			return nil, err
@@ -180,23 +298,10 @@ func (s *PostgresStore) CreateReport(ctx context.Context, req CreateReportReques
 	result.MaxUserID = req.MaxUserID
 	result.ReportNumber = fmt.Sprintf("%d", result.ID)
 
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO messages_history (
-			message_id,
-			admin_id,
-			event_type,
-			new_value,
-			comments
-		)
-		VALUES ($1, NULL, 'status', 'moderation', 'created by max bot')
-	`, result.ID); err != nil {
-		return nil, fmt.Errorf("insert message history: %w", err)
-	}
-
 	if err := s.storeMediaFiles(ctx, tx, result.ID, req.Attachments); err != nil {
 		return nil, err
 	}
-	if draftID > 0 {
+	if draftID > 0 && s.hasDraftAttachments {
 		if _, err := tx.ExecContext(ctx, `
 			DELETE FROM draft_attachments
 			WHERE message_id = $1
@@ -205,7 +310,7 @@ func (s *PostgresStore) CreateReport(ctx context.Context, req CreateReportReques
 		}
 	}
 
-	if req.DialogDedupKey != "" {
+	if req.DialogDedupKey != "" && s.hasDialogReports {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE dialog_reports
 			SET message_id = $1, normalized_at = NOW()
@@ -373,7 +478,7 @@ func (s *PostgresStore) GetConversation(ctx context.Context, maxUserID int64) (*
 		return nil, fmt.Errorf("select conversation user: %w", err)
 	}
 
-	draft, err := loadActiveDraft(ctx, s.db, state.UserID)
+	draft, err := loadActiveDraft(ctx, s.db, state.UserID, s.hasDraftAttachments)
 	if err != nil {
 		return nil, err
 	}
@@ -463,12 +568,12 @@ func (s *PostgresStore) SaveConversation(ctx context.Context, req SaveConversati
 				return nil, fmt.Errorf("insert draft message: %w", err)
 			}
 		}
-		if err := saveDraftAttachments(ctx, tx, draftID, req.ActiveDraft.AttachmentLog, req.ActiveDraft.Attachments); err != nil {
+		if err := saveDraftAttachments(ctx, tx, draftID, req.ActiveDraft.AttachmentLog, req.ActiveDraft.Attachments, s.hasDraftAttachments); err != nil {
 			return nil, err
 		}
 	}
 
-	state, err := loadConversationTx(ctx, tx, req.MaxUserID)
+	state, err := loadConversationTx(ctx, tx, req.MaxUserID, s.hasDraftAttachments)
 	if err != nil {
 		return nil, err
 	}
@@ -586,7 +691,10 @@ func (s *PostgresStore) GetPendingClarification(ctx context.Context, maxUserID i
 			JOIN user_notifications un ON un.id = mh.notification_id
 			WHERE mh.message_id = m.id
 			  AND mh.event_type = 'status'
-			  AND mh.new_value = 'clarification_requested'
+			  AND COALESCE(
+			  	to_jsonb(mh)->>'new_value',
+			  	to_jsonb(mh)->'value'->>'new_value'
+			  ) = 'clarification_requested'
 			  AND mh.notification_id IS NOT NULL
 			ORDER BY mh.date DESC, mh.id DESC
 			LIMIT 1
@@ -629,11 +737,11 @@ func (s *PostgresStore) GetPendingClarification(ctx context.Context, maxUserID i
 }
 
 func (s *PostgresStore) AnswerClarification(ctx context.Context, req ClarificationAnswerRequest) error {
-	return s.completeClarification(ctx, req.ClarificationID, req.MaxUserID, nullableString(req.Answer), RequestStatusAnswered, "clarification answered by user")
+	return s.completeClarification(ctx, req.ClarificationID, req.MaxUserID, nullableString(req.Answer), RequestStatusAnswered)
 }
 
 func (s *PostgresStore) RejectClarification(ctx context.Context, req ClarificationRejectRequest) error {
-	return s.completeClarification(ctx, req.ClarificationID, req.MaxUserID, nil, RequestStatusRejected, "clarification rejected by user")
+	return s.completeClarification(ctx, req.ClarificationID, req.MaxUserID, nil, RequestStatusRejected)
 }
 
 func (s *PostgresStore) ListReportsByMaxUserID(ctx context.Context, maxUserID int64) ([]ReportSummary, error) {
@@ -811,7 +919,7 @@ func (s *PostgresStore) listReports(ctx context.Context, filter ListReportsFilte
 	return items, nil
 }
 
-func (s *PostgresStore) completeClarification(ctx context.Context, clarificationID, maxUserID int64, answer any, status RequestStatus, historyComment string) error {
+func (s *PostgresStore) completeClarification(ctx context.Context, clarificationID, maxUserID int64, answer any, status RequestStatus) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -820,9 +928,9 @@ func (s *PostgresStore) completeClarification(ctx context.Context, clarification
 		_ = tx.Rollback()
 	}()
 
-	var messageID int64
+	var marker int
 	if err := tx.QueryRowContext(ctx, `
-		SELECT cr.message_id
+		SELECT 1
 		FROM clarification_requests cr
 		JOIN messages m ON m.id = cr.message_id
 		JOIN users u ON u.id = m.user_id
@@ -830,7 +938,7 @@ func (s *PostgresStore) completeClarification(ctx context.Context, clarification
 		  AND u.max_id = $2
 		  AND cr.status = 'new'
 		FOR UPDATE
-	`, clarificationID, maxUserID).Scan(&messageID); err != nil {
+	`, clarificationID, maxUserID).Scan(&marker); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -842,31 +950,9 @@ func (s *PostgresStore) completeClarification(ctx context.Context, clarification
 		SET answer = $2,
 		    status = $3,
 		    updated_at = NOW()
-		WHERE id = $1
+	    WHERE id = $1
 	`, clarificationID, answer, status); err != nil {
 		return fmt.Errorf("update clarification: %w", err)
-	}
-
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE messages
-		SET status = 'in_progress',
-		    updated_at = NOW()
-		WHERE id = $1
-	`, messageID); err != nil {
-		return fmt.Errorf("update message status after clarification: %w", err)
-	}
-
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO messages_history (
-			message_id,
-			admin_id,
-			event_type,
-			new_value,
-			comments
-		)
-		VALUES ($1, NULL, 'status', 'in_progress', $2)
-	`, messageID, historyComment); err != nil {
-		return fmt.Errorf("insert clarification history: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -876,6 +962,10 @@ func (s *PostgresStore) completeClarification(ctx context.Context, clarification
 }
 
 func (s *PostgresStore) findCreatedReportByDialogKey(ctx context.Context, tx *sql.Tx, dedupKey string) (*CreatedReport, error) {
+	if !s.hasDialogReports {
+		return nil, nil
+	}
+
 	var existingID sql.NullInt64
 	err := tx.QueryRowContext(ctx, `
 		SELECT message_id
@@ -974,7 +1064,7 @@ type rowQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func loadActiveDraft(ctx context.Context, q rowQuerier, userID int64) (*DraftMessage, error) {
+func loadActiveDraft(ctx context.Context, q rowQuerier, userID int64, hasDraftAttachments bool) (*DraftMessage, error) {
 	row := q.QueryRowContext(ctx, `
 		SELECT
 			id,
@@ -1011,7 +1101,7 @@ func loadActiveDraft(ctx context.Context, q rowQuerier, userID int64) (*DraftMes
 		}
 		return nil, fmt.Errorf("select active draft: %w", err)
 	}
-	attachmentLog, attachments, err := loadDraftAttachments(ctx, q, draft.ID)
+	attachmentLog, attachments, err := loadDraftAttachments(ctx, q, draft.ID, hasDraftAttachments)
 	if err != nil {
 		return nil, err
 	}
@@ -1020,7 +1110,11 @@ func loadActiveDraft(ctx context.Context, q rowQuerier, userID int64) (*DraftMes
 	return &draft, nil
 }
 
-func saveDraftAttachments(ctx context.Context, tx *sql.Tx, draftID int64, attachmentLog []string, attachments []MediaAttachment) error {
+func saveDraftAttachments(ctx context.Context, tx *sql.Tx, draftID int64, attachmentLog []string, attachments []MediaAttachment, hasDraftAttachments bool) error {
+	if !hasDraftAttachments {
+		return nil
+	}
+
 	if draftID <= 0 {
 		return nil
 	}
@@ -1057,7 +1151,11 @@ func saveDraftAttachments(ctx context.Context, tx *sql.Tx, draftID int64, attach
 	return nil
 }
 
-func loadDraftAttachments(ctx context.Context, q rowQuerier, draftID int64) ([]string, []MediaAttachment, error) {
+func loadDraftAttachments(ctx context.Context, q rowQuerier, draftID int64, hasDraftAttachments bool) ([]string, []MediaAttachment, error) {
+	if !hasDraftAttachments {
+		return nil, nil, nil
+	}
+
 	var attachmentLogRaw []byte
 	var attachmentsRaw []byte
 	err := q.QueryRowContext(ctx, `
@@ -1089,7 +1187,7 @@ func loadDraftAttachments(ctx context.Context, q rowQuerier, draftID int64) ([]s
 	return attachmentLog, attachments, nil
 }
 
-func loadConversationTx(ctx context.Context, tx *sql.Tx, maxUserID int64) (*ConversationState, error) {
+func loadConversationTx(ctx context.Context, tx *sql.Tx, maxUserID int64, hasDraftAttachments bool) (*ConversationState, error) {
 	row := tx.QueryRowContext(ctx, `
 		SELECT id, max_id, stage::text, COALESCE(previous_stage::text, '')
 		FROM users
@@ -1107,12 +1205,81 @@ func loadConversationTx(ctx context.Context, tx *sql.Tx, maxUserID int64) (*Conv
 		return nil, fmt.Errorf("select conversation state: %w", err)
 	}
 
-	draft, err := loadActiveDraft(ctx, tx, state.UserID)
+	draft, err := loadActiveDraft(ctx, tx, state.UserID, hasDraftAttachments)
 	if err != nil {
 		return nil, err
 	}
 	state.ActiveDraft = draft
 	return &state, nil
+}
+
+func (s *PostgresStore) buildStatusHistoryInsert(messageID int64, status string, comment string) (string, []any, error) {
+	commentCol := ""
+	commentParam := ""
+	args := []any{messageID, status}
+	if s.historyCommentCol != "" {
+		commentCol = ", " + s.historyCommentCol
+		commentParam = ", $3"
+		args = append(args, comment)
+	}
+
+	var query string
+	switch s.historyValueExpr {
+	case "new_value":
+		query = `
+			INSERT INTO messages_history (
+				message_id,
+				admin_id,
+				event_type,
+				new_value` + commentCol + `
+			)
+			VALUES ($1, NULL, 'status', $2` + commentParam + `)
+		`
+	case "value":
+		query = `
+			INSERT INTO messages_history (
+				message_id,
+				admin_id,
+				event_type,
+				value` + commentCol + `
+			)
+			VALUES ($1, NULL, 'status', jsonb_build_object('old_value', NULL::text, 'new_value', $2::text)` + commentParam + `)
+		`
+	default:
+		return "", nil, fmt.Errorf("unsupported history value expression %q", s.historyValueExpr)
+	}
+
+	return query, args, nil
+}
+
+func envBoolDefaultTrue(key string) bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if value == "" {
+		return true
+	}
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
+
+func envBoolDefaultFalse(key string) bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if value == "" {
+		return false
+	}
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return false
+	}
 }
 
 func nullableInt(value int) any {
