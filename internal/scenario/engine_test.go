@@ -31,6 +31,7 @@ type reportCreatorMock struct {
 	mu       sync.Mutex
 	requests []reporting.CreateReportRequest
 	result   *reporting.CreatedReport
+	err      error
 }
 
 type reportReaderMock struct {
@@ -208,6 +209,9 @@ func (m *reportCreatorMock) CreateReport(_ context.Context, req reporting.Create
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.requests = append(m.requests, req)
+	if m.err != nil {
+		return nil, m.err
+	}
 	if m.result != nil {
 		return m.result, nil
 	}
@@ -218,6 +222,58 @@ func (m *reportCreatorMock) CreateReport(_ context.Context, req reporting.Create
 		Stage:        "sended",
 		CreatedAt:    time.Now().UTC(),
 	}, nil
+}
+
+func TestFlowSendDraftBlockedOutsideConfirmState(t *testing.T) {
+	mock := &senderMock{}
+	reportMock := &reportSinkMock{}
+	creatorMock := &reportCreatorMock{}
+	engine := New(mock, referenceProviderMock{}, WithReportSink(reportMock), WithReportCreator(creatorMock))
+	userID := int64(1901)
+
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb-outside-send", "report:send")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	if got := mock.lastText(); !strings.Contains(got, "Черновик не готов к отправке") {
+		t.Fatalf("unexpected bot response: %q", got)
+	}
+	if reportMock.count() != 0 {
+		t.Fatalf("expected no outbox payload writes, got %d", reportMock.count())
+	}
+	if len(creatorMock.requests) != 0 {
+		t.Fatalf("expected no create report requests, got %d", len(creatorMock.requests))
+	}
+}
+
+func TestFlowSendDraftBlockedWhenDraftInvalid(t *testing.T) {
+	mock := &senderMock{}
+	reportMock := &reportSinkMock{}
+	creatorMock := &reportCreatorMock{}
+	engine := New(mock, referenceProviderMock{}, WithReportSink(reportMock), WithReportCreator(creatorMock))
+	userID := int64(1902)
+
+	session := engine.session(userID)
+	applyState(session, stateReportConfirm)
+	session.Loaded = true
+	session.HasUserRecord = true
+	session.Draft.CategoryID = 11
+	session.Draft.MunicipalityID = 21
+	// Intentionally leave required fields empty to emulate stale/incomplete confirm.
+
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb-invalid-send", "report:send")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	if got := mock.lastText(); !strings.Contains(got, "Черновик заполнен не полностью") {
+		t.Fatalf("unexpected bot response: %q", got)
+	}
+	if reportMock.count() != 0 {
+		t.Fatalf("expected no outbox payload writes, got %d", reportMock.count())
+	}
+	if len(creatorMock.requests) != 0 {
+		t.Fatalf("expected no create report requests, got %d", len(creatorMock.requests))
+	}
 }
 
 func (m *reportReaderMock) ListReportsByMaxUserID(_ context.Context, _ int64) ([]reporting.ReportSummary, error) {
@@ -736,6 +792,66 @@ func TestFlowSendDraftKeepsSuccessWhenRawBackfillFails(t *testing.T) {
 	assertAcceptedReportMessage(t, mock.lastText(), "15")
 }
 
+func TestFlowAllowsSecondReportAfterFirstSend(t *testing.T) {
+	mock := &senderMock{}
+	reportMock := &reportSinkMock{}
+	creatorMock := &reportCreatorMock{}
+	engine := New(mock, referenceProviderMock{}, WithReportSink(reportMock), WithReportCreator(creatorMock))
+	userID := int64(1903)
+
+	firstFlow := []maxapi.Update{
+		callbackUpdate(userID, "cb1", "report:consent_yes"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "2"),
+		textUpdate(userID, "79991234567"),
+		textUpdate(userID, "ул. Мира, дом 1"),
+		textUpdate(userID, "31/03/26 14:45"),
+		textUpdate(userID, "Описание нарушения №1"),
+		callbackUpdate(userID, "cb2", "report:skip_media"),
+		callbackUpdate(userID, "cb3", "report:skip_extra"),
+		callbackUpdate(userID, "cb4", "report:send"),
+	}
+	for _, step := range firstFlow {
+		if err := engine.HandleUpdate(context.Background(), step); err != nil {
+			t.Fatalf("HandleUpdate() first flow error = %v", err)
+		}
+	}
+
+	secondFlow := []maxapi.Update{
+		callbackUpdate(userID, "cb5", "menu:report"),
+		callbackUpdate(userID, "cb6", "report:consent_yes"),
+		textUpdate(userID, "2"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "79991234567"),
+		textUpdate(userID, "ул. Ленина, дом 2"),
+		textUpdate(userID, "01/04/26 10:20"),
+		textUpdate(userID, "Описание нарушения №2"),
+		callbackUpdate(userID, "cb7", "report:skip_media"),
+		callbackUpdate(userID, "cb8", "report:skip_extra"),
+		callbackUpdate(userID, "cb9", "report:send"),
+	}
+	for _, step := range secondFlow {
+		if err := engine.HandleUpdate(context.Background(), step); err != nil {
+			t.Fatalf("HandleUpdate() second flow error = %v", err)
+		}
+	}
+
+	if len(creatorMock.requests) != 2 {
+		t.Fatalf("expected 2 create report requests, got %d", len(creatorMock.requests))
+	}
+	if reportMock.count() != 4 {
+		t.Fatalf("expected 4 outbox payload writes (2 initial + 2 backfill), got %d", reportMock.count())
+	}
+
+	for _, txt := range mock.messageTexts() {
+		if strings.Contains(txt, "Не удалось создать обращение") {
+			t.Fatalf("unexpected create error message in flow: %q", txt)
+		}
+	}
+
+	assertAcceptedReportMessage(t, mock.lastText(), "15")
+}
+
 func TestFlowAllowsFreeformIncidentTime(t *testing.T) {
 	mock := &senderMock{}
 	engine := New(mock, referenceProviderMock{})
@@ -865,6 +981,47 @@ func TestFlowRejectsMediaWhenVideoDurationTooLong(t *testing.T) {
 	}
 	if !strings.Contains(mock.lastText(), "превышает 2 минуты") {
 		t.Fatalf("expected video duration limit message, got %q", mock.lastText())
+	}
+}
+
+func TestFlowAllowsVideoWithoutDurationMetadata(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{})
+	userID := int64(1007)
+
+	prepareSteps := []maxapi.Update{
+		callbackUpdate(userID, "cb1", "report:consent_yes"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "1"),
+		textUpdate(userID, "89991234567"),
+		textUpdate(userID, "ул. Мира, дом 1"),
+		textUpdate(userID, "31/03/26 14:45"),
+		textUpdate(userID, "Описание нарушения"),
+	}
+
+	for _, step := range prepareSteps {
+		if err := engine.HandleUpdate(context.Background(), step); err != nil {
+			t.Fatalf("HandleUpdate() error = %v", err)
+		}
+	}
+
+	raw, err := json.Marshal(map[string]any{"token": "video_token_without_duration"})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	if err := engine.HandleUpdate(context.Background(), messageWithAttachmentsUpdate(userID, "", []maxapi.AttachmentBody{
+		{Type: "video", RawPayload: raw},
+	})); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	session := engine.session(userID)
+	if session.State != stateReportExtra {
+		t.Fatalf("expected state %q, got %q", stateReportExtra, session.State)
+	}
+	if !strings.Contains(mock.lastText(), "Вложения получены.") {
+		t.Fatalf("expected successful media receive message, got %q", mock.lastText())
 	}
 }
 
@@ -1007,6 +1164,15 @@ func TestFlowSendsMediaPayloadToCreateReport(t *testing.T) {
 	if strings.TrimSpace(string(req.Attachments[0].Payload)) == "" {
 		t.Fatalf("expected attachment payload to be forwarded")
 	}
+
+	texts := mock.messageTexts()
+	if len(texts) < 2 {
+		t.Fatalf("expected progress and final confirmation messages, got %d", len(texts))
+	}
+	if !strings.Contains(texts[len(texts)-2], "Загружаем приложенные вами файлы и формируем сообщение...") {
+		t.Fatalf("expected progress message before final confirmation, got %q", texts[len(texts)-2])
+	}
+	assertAcceptedReportMessage(t, mock.lastText(), "15")
 }
 
 func TestFlowRestoresDraftMediaAfterReload(t *testing.T) {
@@ -1053,7 +1219,10 @@ func TestFlowRestoresDraftMediaAfterReload(t *testing.T) {
 	)
 
 	userID := int64(1301)
-	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb1", "report:send")); err != nil {
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb1", "report:skip_extra")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb2", "report:send")); err != nil {
 		t.Fatalf("HandleUpdate() error = %v", err)
 	}
 

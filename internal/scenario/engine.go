@@ -503,9 +503,16 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		if len(attachments) > 5 {
 			return e.sendText(ctx, userID, "Получено больше 5 вложений. Повторите попытку.", mediaKeyboard(allowSkip))
 		}
-		totalVideoDuration, err := totalVideoDurationSeconds(attachments)
+		totalVideoDuration, unknownVideoDurationCount, err := totalVideoDurationSeconds(attachments)
 		if err != nil {
 			return e.sendText(ctx, userID, "Не удалось определить длительность видео. Проверьте вложения и повторите попытку.", mediaKeyboard(allowSkip))
+		}
+		if unknownVideoDurationCount > 0 {
+			slog.Warn(
+				"для части видео не удалось определить длительность, ограничение 2 минуты проверено только по доступным данным",
+				"user_id", userID,
+				"unknown_video_count", unknownVideoDurationCount,
+			)
 		}
 		if totalVideoDuration > maxTotalVideoDurationSeconds {
 			return e.sendText(ctx, userID, "Суммарная длительность видео превышает 2 минуты. Сократите длительность и отправьте вложения снова.", mediaKeyboard(allowSkip))
@@ -818,18 +825,39 @@ func (e *Engine) sendCurrentStatePrompt(ctx context.Context, userID int64, sessi
 }
 
 func (e *Engine) finishDraft(ctx context.Context, userID int64) error {
+	startedAt := time.Now()
 	session := e.session(userID)
+	if session.State != stateReportConfirm {
+		slog.Warn("получен report:send вне экрана подтверждения", "user_id", userID, "state", session.State)
+		return e.sendText(ctx, userID, "Черновик не готов к отправке. Заполните обращение через «Подать обращение».", backToMenuKeyboard())
+	}
+
+	createReq := e.buildCreateReportRequest(userID, "", session)
+	createReq.Normalize()
+	if err := createReq.Validate(); err != nil {
+		slog.Warn("черновик не прошел локальную валидацию перед отправкой", "user_id", userID, "error", err.Error())
+		return e.sendText(ctx, userID, "Черновик заполнен не полностью или с ошибками. Проверьте данные и нажмите «Отправить» ещё раз.", confirmKeyboard())
+	}
+	if err := e.sendText(ctx, userID, "Загружаем приложенные вами файлы и формируем сообщение...", nil); err != nil {
+		slog.Warn("не удалось отправить промежуточное сообщение о формировании обращения", "user_id", userID, "error", err.Error())
+	}
 
 	completedAt := time.Now().UTC()
 	payload := e.buildDialogPayload(userID, fmt.Sprintf("RAW-%d", completedAt.UnixNano()), completedAt, session)
 	if err := e.reportSink.Store(ctx, payload); err != nil {
-		slog.Error("не удалось сохранить диалог в outbox", "user_id", userID, "dedup_key", payload.DedupKey, "error", err.Error())
+		slog.Error("не удалось сохранить диалог в outbox", "user_id", userID, "dedup_key", payload.DedupKey, "error", err.Error(), "elapsed_ms", time.Since(startedAt).Milliseconds())
 		return e.sendText(ctx, userID, "Не удалось сохранить сообщение. Попробуйте отправить ещё раз немного позже.", confirmKeyboard())
 	}
 
-	created, err := e.reportCreator.CreateReport(ctx, e.buildCreateReportRequest(userID, payload.DedupKey, session))
+	createReq.DialogDedupKey = payload.DedupKey
+	createStartedAt := time.Now()
+	created, err := e.reportCreator.CreateReport(ctx, createReq)
 	if err != nil {
-		slog.Error("не удалось создать обращение в основной БД", "user_id", userID, "dedup_key", payload.DedupKey, "error", err.Error())
+		if errors.Is(err, reporting.ErrInvalidRequest) {
+			slog.Warn("core api отклонил черновик как невалидный", "user_id", userID, "dedup_key", payload.DedupKey, "error", err.Error(), "create_elapsed_ms", time.Since(createStartedAt).Milliseconds(), "total_elapsed_ms", time.Since(startedAt).Milliseconds())
+			return e.sendText(ctx, userID, "Черновик устарел или заполнен не полностью. Проверьте данные и попробуйте отправить снова.", confirmKeyboard())
+		}
+		slog.Error("не удалось создать обращение в основной БД", "user_id", userID, "dedup_key", payload.DedupKey, "error", err.Error(), "create_elapsed_ms", time.Since(createStartedAt).Milliseconds(), "total_elapsed_ms", time.Since(startedAt).Milliseconds())
 		return e.sendText(ctx, userID, "Не удалось создать обращение. Черновик сохранён, попробуйте ещё раз немного позже.", confirmKeyboard())
 	}
 
@@ -841,7 +869,7 @@ func (e *Engine) finishDraft(ctx context.Context, userID int64) error {
 		slog.Warn("не удалось обновить raw-слепок диалога ссылкой на сообщение", "user_id", userID, "report_number", created.ReportNumber, "dedup_key", payload.DedupKey, "error", err.Error())
 	}
 
-	slog.Info("черновик принят", "user_id", userID, "report_number", created.ReportNumber, "dedup_key", payload.DedupKey)
+	slog.Info("черновик принят", "user_id", userID, "report_number", created.ReportNumber, "dedup_key", payload.DedupKey, "create_elapsed_ms", time.Since(createStartedAt).Milliseconds(), "total_elapsed_ms", time.Since(startedAt).Milliseconds())
 	e.resetSession(userID)
 	reset := e.session(userID)
 	if err := e.persistStateOrReply(ctx, userID, reset, true); err != nil {
@@ -1238,36 +1266,41 @@ func canSkipMedia(draft Draft) bool {
 	return strings.Contains(name, "тишина") && strings.Contains(name, "покой")
 }
 
-func totalVideoDurationSeconds(items []maxapi.AttachmentBody) (int, error) {
+func totalVideoDurationSeconds(items []maxapi.AttachmentBody) (int, int, error) {
 	total := 0
+	unknownCount := 0
 	for _, item := range items {
 		if item.Type != "video" {
 			continue
 		}
-		seconds, err := extractVideoDurationSeconds(item.RawPayload)
+		seconds, found, err := extractVideoDurationSeconds(item.RawPayload)
 		if err != nil {
-			return 0, err
+			return 0, 0, err
+		}
+		if !found {
+			unknownCount++
+			continue
 		}
 		total += seconds
 	}
-	return total, nil
+	return total, unknownCount, nil
 }
 
-func extractVideoDurationSeconds(raw json.RawMessage) (int, error) {
+func extractVideoDurationSeconds(raw json.RawMessage) (int, bool, error) {
 	if len(strings.TrimSpace(string(raw))) == 0 {
-		return 0, fmt.Errorf("empty video payload")
+		return 0, false, nil
 	}
 
 	var payload any
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return 0, fmt.Errorf("decode video payload: %w", err)
+		return 0, false, fmt.Errorf("decode video payload: %w", err)
 	}
 
 	seconds, ok := findDurationSeconds(payload, 0)
 	if !ok || seconds <= 0 {
-		return 0, fmt.Errorf("video duration not found")
+		return 0, false, nil
 	}
-	return seconds, nil
+	return seconds, true, nil
 }
 
 func findDurationSeconds(value any, depth int) (int, bool) {
