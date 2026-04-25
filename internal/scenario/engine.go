@@ -875,7 +875,7 @@ func (e *Engine) finishDraft(ctx context.Context, userID int64) error {
 	if err := e.persistStateOrReply(ctx, userID, reset, true); err != nil {
 		return err
 	}
-	return e.sendText(ctx, userID, "Сообщение принято с номером "+created.ReportNumber+".\n\nТекущий статус: "+humanizeReportStatus(created.Status)+".", backToMenuKeyboard())
+	return e.sendText(ctx, userID, acceptedReportMessage(created), backToMenuKeyboard())
 }
 
 func (e *Engine) sendDraftSummary(ctx context.Context, userID int64) error {

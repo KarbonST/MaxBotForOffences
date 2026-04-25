@@ -165,14 +165,23 @@ func assertMainMenuKeyboard(t *testing.T, body maxapi.NewMessageBody) {
 func assertAcceptedReportMessage(t *testing.T, text, reportNumber string) {
 	t.Helper()
 
-	if !strings.Contains(text, "Сообщение") || !strings.Contains(text, "принято") {
+	if !strings.Contains(text, "Сообщение о правонарушении принято") {
 		t.Fatalf("expected accepted message text, got %q", text)
 	}
-	if !strings.Contains(text, "номер "+reportNumber) && !strings.Contains(text, "номером "+reportNumber) {
+	if !strings.Contains(text, "номером "+reportNumber) && !strings.Contains(text, "номер "+reportNumber) {
 		t.Fatalf("expected report number %s in final confirmation, got %q", reportNumber, text)
 	}
-	if !strings.Contains(text, "Текущий статус: На модерации.") {
-		t.Fatalf("expected humanized status in final confirmation, got %q", text)
+	if !strings.Contains(text, "Статусы рассмотрения сообщения:") {
+		t.Fatalf("expected review statuses block in final confirmation, got %q", text)
+	}
+	if !strings.Contains(text, "• модерация") || !strings.Contains(text, "• рассмотрено") {
+		t.Fatalf("expected status flow in final confirmation, got %q", text)
+	}
+	if !strings.Contains(text, "При изменении статуса сообщения вам поступит уведомление.") {
+		t.Fatalf("expected notification note in final confirmation, got %q", text)
+	}
+	if !strings.Contains(text, "Сообщение будет храниться не более 30 дней.") {
+		t.Fatalf("expected retention note in final confirmation, got %q", text)
 	}
 }
 
@@ -1293,7 +1302,7 @@ func TestFlowMyReportsShowsListAndDetails(t *testing.T) {
 		t.Fatalf("HandleUpdate() error = %v", err)
 	}
 
-	if !strings.Contains(mock.lastText(), "Ваши обращения:") {
+	if !strings.Contains(mock.lastText(), "Список сообщений, написанных заявителем") {
 		t.Fatalf("expected reports list text, got %q", mock.lastText())
 	}
 	if !strings.Contains(mock.lastText(), "№15") {
@@ -1305,11 +1314,17 @@ func TestFlowMyReportsShowsListAndDetails(t *testing.T) {
 	if !strings.Contains(mock.lastText(), "Дата: 31.03.2026 16:00") {
 		t.Fatalf("expected date in list, got %q", mock.lastText())
 	}
+	if !strings.Contains(mock.lastText(), "Категория: Парковка") {
+		t.Fatalf("expected category in list, got %q", mock.lastText())
+	}
 	if !strings.Contains(mock.lastText(), "Статус: В работе") {
 		t.Fatalf("expected status line in list, got %q", mock.lastText())
 	}
-	if !strings.Contains(mock.lastText(), "Отправьте номер сообщения") {
+	if !strings.Contains(mock.lastText(), "Для просмотра детальной информации по сообщению отправьте номер сообщения в чат.") {
 		t.Fatalf("expected prompt to send real report number, got %q", mock.lastText())
+	}
+	if !strings.Contains(mock.lastText(), "Сообщения хранятся не более 30 дней.") {
+		t.Fatalf("expected retention note in list, got %q", mock.lastText())
 	}
 	listKeyboard := inlineKeyboardPayload(t, mock.lastMessage())
 	if len(listKeyboard.Buttons) != 1 || listKeyboard.Buttons[0][0].Text != "Вернуться в начало" {
@@ -1386,7 +1401,7 @@ func TestFlowMyReportsDetailBackReturnsToList(t *testing.T) {
 		t.Fatalf("HandleUpdate() error = %v", err)
 	}
 
-	if !strings.Contains(mock.lastText(), "Ваши обращения:") {
+	if !strings.Contains(mock.lastText(), "Список сообщений, написанных заявителем") {
 		t.Fatalf("expected reports list after back callback, got %q", mock.lastText())
 	}
 	session := engine.session(userID)

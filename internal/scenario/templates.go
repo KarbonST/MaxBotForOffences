@@ -211,16 +211,35 @@ func myReportDetailKeyboard() []maxapi.AttachmentRequest {
 
 func myReportsListMessage(items []reporting.ReportSummary) string {
 	lines := []string{
-		"Ваши обращения:",
+		"Список сообщений, написанных заявителем (номер, дата, категория, статус)",
+		"",
 	}
 	for _, item := range items {
 		lines = append(lines, fmt.Sprintf("№%s", item.ReportNumber))
 		lines = append(lines, fmt.Sprintf("Дата: %s", formatReportMoment(item.CreatedAt, item.SendedAt)))
+		if value := strings.TrimSpace(item.CategoryName); value != "" {
+			lines = append(lines, fmt.Sprintf("Категория: %s", value))
+		}
 		lines = append(lines, fmt.Sprintf("Статус: %s", humanizeReportStatus(item.Status)))
 		lines = append(lines, "")
 	}
-	lines = append(lines, "Отправьте номер сообщения, чтобы посмотреть подробности.")
+	lines = append(lines, "Для просмотра детальной информации по сообщению отправьте номер сообщения в чат.", "", "Сообщения хранятся не более 30 дней.")
 	return strings.Join(lines, "\n")
+}
+
+func acceptedReportMessage(item *reporting.CreatedReport) string {
+	return strings.Join([]string{
+		fmt.Sprintf("Сообщение о правонарушении принято с номером %s от %s.", item.ReportNumber, formatReportMoment(item.CreatedAt, item.SendedAt)),
+		"",
+		"Статусы рассмотрения сообщения:",
+		"• модерация",
+		"• в работе/отклонено",
+		"• запрошена дополнительная информация (при необходимости)",
+		"• рассмотрено",
+		"",
+		"При изменении статуса сообщения вам поступит уведомление.",
+		"Сообщение будет храниться не более 30 дней.",
+	}, "\n")
 }
 
 func myReportDetailMessage(item *reporting.ReportDetail) string {
