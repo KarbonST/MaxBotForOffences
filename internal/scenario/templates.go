@@ -13,12 +13,12 @@ import (
 var userFacingLocation = loadUserFacingLocation()
 
 const (
-	personalDataLawURL = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/%D0%A4%D0%B5%D0%B4%D0%B5%D1%80%D0%B0%D0%BB%D1%8C%D0%BD%D1%8B%D0%B9%20%D0%B7%D0%B0%D0%BA%D0%BE%D0%BD%20%D0%BE%D1%82%2027.07.2006%20N%20152-%D0%A4%D0%97%20%28%D1%80%D0%B5%D0%B4.%20%D0%BE%D1%82%2024.06.2025.docx"
-	regionalCodeURL    = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/%D0%97%D0%B0%D0%BA%D0%BE%D0%BD%20%D0%92%D0%BE%D0%BB%D0%B3%D0%BE%D0%B3%D1%80%D0%B0%D0%B4%D1%81%D0%BA%D0%BE%D0%B9%20%D0%BE%D0%B1%D0%BB%D0%B0%D1%81%D1%82%D0%B8%20%D0%BE%D1%82%2011.06.2008%20N%201693-%D0%9E%D0%94%20.docx"
-	commissionsLawURL  = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/%D0%97%D0%B0%D0%BA%D0%BE%D0%BD%20%D0%92%D0%BE%D0%BB%D0%B3%D0%BE%D0%B3%D1%80%D0%B0%D0%B4%D1%81%D0%BA%D0%BE%D0%B9%20%D0%BE%D0%B1%D0%BB%D0%B0%D1%81%D1%82%D0%B8%20%D0%BE%D1%82%2002.12.2008%20N%201789-%D0%9E%D0%94.docx"
-	powersLawURL       = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/%D0%97%D0%B0%D0%BA%D0%BE%D0%BD%20%D0%92%D0%BE%D0%BB%D0%B3%D0%BE%D0%B3%D1%80%D0%B0%D0%B4%D1%81%D0%BA%D0%BE%D0%B9%20%D0%BE%D0%B1%D0%BB%D0%B0%D1%81%D1%82%D0%B8%20%D0%BE%D1%82%2002.12.2008%20N%201792-%D0%9E%D0%94.docx"
-	userAgreementURL   = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/%D0%9F%D0%BE%D0%BB%D1%8C%D0%B7%D0%BE%D0%B2%D0%B0%D1%82%D0%B5%D0%BB%D1%8C%D1%81%D0%BA%D0%BE%D0%B5%20%D1%81%D0%BE%D0%B3%D0%BB%D0%B0%D1%88%D0%B5%D0%BD%D0%B8%D0%B5.docx"
-	privacyPolicyURL   = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/%D0%A1%D0%BE%D0%B3%D0%BB%D0%B0%D1%88%D0%B5%D0%BD%D0%B8%D0%B5%20%D0%BE%20%D0%BA%D0%BE%D0%BD%D1%84%D0%B8%D0%B4%D0%B5%D0%BD%D1%86%D0%B8%D0%B0%D0%BB%D1%8C%D0%BD%D0%BE%D1%81%D1%82%D0%B8%20%D0%BD%D0%B0%20%D1%81%D0%B0%D0%B9%D1%82.docx"
+	personalDataLawURL = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/152-FZ.docx"
+	regionalCodeURL    = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/kodeks_VO.docx"
+	commissionsLawURL  = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/Ob_administrativnykh_komissiyakh.docx"
+	powersLawURL       = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/Zakon_1792-OD_VO.docx"
+	userAgreementURL   = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/Polzovatelskoe_soglashenie.docx"
+	privacyPolicyURL   = "https://ams.volgograd.ru/other/territorialnye-administrativnye-komissii-volgogradskoy-oblasti/Soglashenie_o_konfidentsialnosti.docx"
 )
 
 func mainMenuMessage() (string, []maxapi.AttachmentRequest) {
