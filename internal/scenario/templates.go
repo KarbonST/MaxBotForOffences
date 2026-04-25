@@ -83,18 +83,20 @@ func consentMessage() (string, []maxapi.AttachmentRequest) {
 }
 
 func categoriesPrompt(items []reference.Item) string {
-	lines := []string{"Список категорий. Отправьте номер категории сообщением в чат."}
+	lines := []string{"Список категорий административных правонарушений (в соответствии с Кодексом Волгоградской области об административных правонарушениях)"}
 	for i, item := range items {
-		lines = append(lines, fmt.Sprintf("%d. %s", i+1, item.Name))
+		lines = append(lines, fmt.Sprintf("%d - %s", i+1, item.Name))
 	}
+	lines = append(lines, "", "Для продолжения отправьте номер категории.")
 	return strings.Join(lines, "\n")
 }
 
 func municipalitiesPrompt(items []reference.Item) string {
-	lines := []string{"Список муниципалитетов. Отправьте номер муниципалитета сообщением в чат."}
+	lines := []string{"Список муниципалитетов"}
 	for i, item := range items {
-		lines = append(lines, fmt.Sprintf("%d. %s", i+1, item.Name))
+		lines = append(lines, fmt.Sprintf("%d - %s", i+1, item.Name))
 	}
+	lines = append(lines, "", "Для продолжения отправьте номер муниципалитета.")
 	return strings.Join(lines, "\n")
 }
 

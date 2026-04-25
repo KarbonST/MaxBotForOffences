@@ -415,7 +415,7 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		}
 		index, ok := parseChoice(text, len(categories))
 		if !ok {
-			return e.sendText(ctx, userID, "Категория не найдена, отправьте номер из списка.", backToMenuKeyboard())
+			return e.sendText(ctx, userID, fmt.Sprintf("Категория с номером «%s» не найдена, повторите попытку", strings.TrimSpace(text)), backToMenuKeyboard())
 		}
 		selected := categories[index-1]
 		session.Draft.CategoryID = selected.ID
@@ -436,7 +436,7 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		}
 		index, ok := parseChoice(text, len(municipalities))
 		if !ok {
-			return e.sendText(ctx, userID, "Муниципалитет не найден, отправьте номер из списка.", backToMenuKeyboard())
+			return e.sendText(ctx, userID, fmt.Sprintf("Муниципалитет с номером «%s» не найден, повторите попытку", strings.TrimSpace(text)), backToMenuKeyboard())
 		}
 		selected := municipalities[index-1]
 		session.Draft.MunicipalityID = selected.ID

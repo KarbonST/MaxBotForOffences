@@ -444,7 +444,31 @@ func TestFlowValidationCategoryError(t *testing.T) {
 	if session.State != stateReportCategory {
 		t.Fatalf("expected state %q, got %q", stateReportCategory, session.State)
 	}
-	if !strings.Contains(mock.lastText(), "Категория не найдена") {
+	if got := mock.lastText(); got != "Категория с номером «abc» не найдена, повторите попытку" {
+		t.Fatalf("expected spec validation text, got %q", got)
+	}
+}
+
+func TestFlowValidationMunicipalityError(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{})
+	userID := int64(1021)
+
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb1", "report:consent_yes")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "1")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "abc")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	session := engine.session(userID)
+	if session.State != stateReportMunicipal {
+		t.Fatalf("expected state %q, got %q", stateReportMunicipal, session.State)
+	}
+	if got := mock.lastText(); got != "Муниципалитет с номером «abc» не найден, повторите попытку" {
 		t.Fatalf("expected validation text, got %q", mock.lastText())
 	}
 }
@@ -671,6 +695,51 @@ func TestViolationsListMatchesSpecButtons(t *testing.T) {
 	session := engine.session(userID)
 	if session.State != stateMainMenu {
 		t.Fatalf("expected state %q after violations list, got %q", stateMainMenu, session.State)
+	}
+}
+
+func TestCategoryPromptMatchesSpec(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{})
+	userID := int64(10361)
+
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb-category", "report:consent_yes")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	last := mock.lastText()
+	if !strings.Contains(last, "Список категорий административных правонарушений") {
+		t.Fatalf("expected category heading from spec, got %q", last)
+	}
+	if !strings.Contains(last, "1 - Тишина и покой в ночное время") {
+		t.Fatalf("expected numbered categories list, got %q", last)
+	}
+	if !strings.Contains(last, "Для продолжения отправьте номер категории.") {
+		t.Fatalf("expected category continuation prompt, got %q", last)
+	}
+}
+
+func TestMunicipalityPromptMatchesSpec(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{})
+	userID := int64(10362)
+
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb-category", "report:consent_yes")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "1")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	last := mock.lastText()
+	if !strings.Contains(last, "Список муниципалитетов") {
+		t.Fatalf("expected municipality heading from spec, got %q", last)
+	}
+	if !strings.Contains(last, "1 - Муниципалитет 1") {
+		t.Fatalf("expected numbered municipalities list, got %q", last)
+	}
+	if !strings.Contains(last, "Для продолжения отправьте номер муниципалитета.") {
+		t.Fatalf("expected municipality continuation prompt, got %q", last)
 	}
 }
 
