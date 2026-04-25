@@ -1,4 +1,4 @@
--- Основа схемы приведена к актуальной версии БД (2026-04-14.sql).
+-- Основа схемы приведена к актуальной версии БД (2026-04-16.sql).
 -- Наполнение справочников (категории и муниципалитеты) находится в 001_reference_schema.sql.
 -- Техническая raw-таблица dialog_reports вынесена в 002_dialog_reports.sql.
 
@@ -159,6 +159,7 @@ CREATE TABLE IF NOT EXISTS messages_history (
     event_type history_event_type NOT NULL,
     value JSONB NOT NULL,
     notification_id INTEGER,
+    clarification_id INTEGER,
     comment TEXT,
     created_at TIMESTAMP DEFAULT NOW()
 );
@@ -224,6 +225,12 @@ BEGIN
             FOREIGN KEY (notification_id) REFERENCES user_notifications(id) ON DELETE SET NULL;
     END IF;
 
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_history_clarification') THEN
+        ALTER TABLE messages_history
+            ADD CONSTRAINT fk_history_clarification
+            FOREIGN KEY (clarification_id) REFERENCES clarification_requests(id) ON DELETE SET NULL;
+    END IF;
+
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_files_message') THEN
         ALTER TABLE files
             ADD CONSTRAINT fk_files_message
@@ -261,6 +268,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_sended ON messages(sended_at) WHERE send
 CREATE INDEX IF NOT EXISTS idx_history_message ON messages_history(message_id);
 CREATE INDEX IF NOT EXISTS idx_history_admin ON messages_history(admin_id);
 CREATE INDEX IF NOT EXISTS idx_history_notification ON messages_history(notification_id);
+CREATE INDEX IF NOT EXISTS idx_history_clarification ON messages_history(clarification_id);
 
 CREATE INDEX IF NOT EXISTS idx_files_message ON files(message_id);
 
@@ -315,3 +323,99 @@ BEGIN
       AND created_at < NOW() - INTERVAL '30 days';
 END;
 $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION handle_notification_error()
+RETURNS TRIGGER AS $$
+DECLARE
+    target_message_id INTEGER;
+    old_message_status message_status;
+BEGIN
+    IF NEW.status = 'error' AND OLD.status IS DISTINCT FROM 'error' THEN
+        SELECT m.id, m.status INTO target_message_id, old_message_status
+        FROM messages m
+        JOIN messages_history mh ON mh.message_id = m.id
+        WHERE mh.notification_id = NEW.id
+          AND mh.event_type = 'status'
+          AND mh.value->>'new_value' = 'clarification_requested'
+        LIMIT 1;
+
+        IF target_message_id IS NOT NULL AND old_message_status != 'in_progress' THEN
+            UPDATE messages
+            SET status = 'in_progress',
+                updated_at = NOW()
+            WHERE id = target_message_id;
+
+            INSERT INTO messages_history (
+                message_id,
+                event_type,
+                value,
+                comment,
+                notification_id
+            ) VALUES (
+                target_message_id,
+                'status',
+                jsonb_build_object(
+                    'old_value', old_message_status,
+                    'new_value', 'in_progress'
+                ),
+                'Clarification notification failed to send (error status)',
+                NEW.id
+            );
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_notification_error_to_in_progress ON user_notifications;
+CREATE TRIGGER trg_notification_error_to_in_progress
+    AFTER UPDATE OF status ON user_notifications
+    FOR EACH ROW
+    EXECUTE FUNCTION handle_notification_error();
+
+CREATE OR REPLACE FUNCTION handle_clarification_response()
+RETURNS TRIGGER AS $$
+DECLARE
+    old_message_status message_status;
+BEGIN
+    IF NEW.status IN ('answered', 'rejected') AND OLD.status IS DISTINCT FROM NEW.status THEN
+        SELECT status INTO old_message_status
+        FROM messages
+        WHERE id = NEW.message_id;
+
+        IF old_message_status != 'in_progress' THEN
+            UPDATE messages
+            SET status = 'in_progress',
+                updated_at = NOW()
+            WHERE id = NEW.message_id;
+
+            INSERT INTO messages_history (
+                message_id,
+                event_type,
+                value,
+                clarification_id,
+                comment
+            ) VALUES (
+                NEW.message_id,
+                'status',
+                jsonb_build_object(
+                    'old_value', old_message_status,
+                    'new_value', 'in_progress'
+                ),
+                NEW.id,
+                CASE NEW.status
+                    WHEN 'answered' THEN 'Response to clarification request received'
+                    WHEN 'rejected' THEN 'Clarification request rejected by user'
+                END
+            );
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_clarification_response_to_in_progress ON clarification_requests;
+CREATE TRIGGER trg_clarification_response_to_in_progress
+    AFTER UPDATE OF status ON clarification_requests
+    FOR EACH ROW
+    EXECUTE FUNCTION handle_clarification_response();
