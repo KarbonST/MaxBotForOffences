@@ -29,7 +29,11 @@ type PostgresStore struct {
 	historyStrict       bool
 }
 
-const defaultMediaRootDir = "/var/www/violations-upload"
+const (
+	defaultMediaRootDir             = "/var/www/violations-upload"
+	mediaDirectoryMode  os.FileMode = 0o2775
+	mediaFileMode       os.FileMode = 0o664
+)
 
 func NewPostgresStore(dsn string) (*PostgresStore, error) {
 	if strings.TrimSpace(dsn) == "" {
@@ -334,8 +338,11 @@ func (s *PostgresStore) storeMediaFiles(ctx context.Context, tx *sql.Tx, message
 
 	directoryDisk := filepath.Join(s.mediaRootDir, strconv.FormatInt(messageID, 10))
 	directoryDB := path.Join(s.mediaRootDir, strconv.FormatInt(messageID, 10))
-	if err := os.MkdirAll(directoryDisk, 0o755); err != nil {
+	if err := os.MkdirAll(directoryDisk, mediaDirectoryMode); err != nil {
 		return fmt.Errorf("create media directory: %w", err)
+	}
+	if err := os.Chmod(directoryDisk, mediaDirectoryMode); err != nil {
+		return fmt.Errorf("set media directory permissions: %w", err)
 	}
 
 	for index, item := range items {
@@ -344,8 +351,11 @@ func (s *PostgresStore) storeMediaFiles(ctx context.Context, tx *sql.Tx, message
 			return err
 		}
 		filePathDisk := filepath.Join(directoryDisk, fileName)
-		if err := os.WriteFile(filePathDisk, content, 0o644); err != nil {
+		if err := os.WriteFile(filePathDisk, content, mediaFileMode); err != nil {
 			return fmt.Errorf("write media file %q: %w", filePathDisk, err)
+		}
+		if err := os.Chmod(filePathDisk, mediaFileMode); err != nil {
+			return fmt.Errorf("set media file permissions %q: %w", filePathDisk, err)
 		}
 
 		filePathDB := path.Join(directoryDB, fileName)
@@ -377,11 +387,36 @@ func (s *PostgresStore) materializeAttachment(ctx context.Context, item MediaAtt
 			fileName := buildMediaFileName(item.FileName, messageID, position, ext)
 			return content, fileName, firstNonEmpty(item.MIMEType, mimeType), ext, nil
 		}
+		if requiresDownloadedMedia(item) {
+			if err == nil {
+				err = fmt.Errorf("downloaded media content is empty")
+			}
+			return nil, "", "", "", fmt.Errorf("download media attachment: %w", err)
+		}
 	}
 
 	trimmedPayload := bytesOrJSON(item.Payload)
 	fileName := buildMediaFileName(item.FileName, messageID, position, ext)
 	return trimmedPayload, fileName, item.MIMEType, ext, nil
+}
+
+func requiresDownloadedMedia(item MediaAttachment) bool {
+	switch strings.ToLower(strings.TrimSpace(item.Type)) {
+	case "photo", "video":
+	default:
+		return false
+	}
+
+	if len(strings.TrimSpace(string(item.Payload))) == 0 {
+		return false
+	}
+
+	payload, err := parseMediaPayload(item.Payload)
+	if err != nil {
+		return true
+	}
+
+	return payload.URL != "" || payload.Token != ""
 }
 
 func decodeEmbeddedBase64(raw json.RawMessage) ([]byte, bool) {
