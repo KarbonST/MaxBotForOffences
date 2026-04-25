@@ -234,7 +234,7 @@ func acceptedReportMessage(item *reporting.CreatedReport) string {
 		fmt.Sprintf("Сообщение о правонарушении принято с номером %s от %s.", item.ReportNumber, formatReportMoment(item.CreatedAt, item.SendedAt)),
 		"",
 		"Статусы рассмотрения сообщения:",
-		"• модерация",
+		"• **модерация**",
 		"• в работе/отклонено",
 		"• запрошена дополнительная информация (при необходимости)",
 		"• рассмотрено",

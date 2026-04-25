@@ -174,7 +174,7 @@ func assertAcceptedReportMessage(t *testing.T, text, reportNumber string) {
 	if !strings.Contains(text, "Статусы рассмотрения сообщения:") {
 		t.Fatalf("expected review statuses block in final confirmation, got %q", text)
 	}
-	if !strings.Contains(text, "• модерация") || !strings.Contains(text, "• рассмотрено") {
+	if !strings.Contains(text, "• **модерация**") || !strings.Contains(text, "• рассмотрено") {
 		t.Fatalf("expected status flow in final confirmation, got %q", text)
 	}
 	if !strings.Contains(text, "При изменении статуса сообщения вам поступит уведомление.") {
@@ -182,6 +182,13 @@ func assertAcceptedReportMessage(t *testing.T, text, reportNumber string) {
 	}
 	if !strings.Contains(text, "Сообщение будет храниться не более 30 дней.") {
 		t.Fatalf("expected retention note in final confirmation, got %q", text)
+	}
+}
+
+func assertMarkdownFormat(t *testing.T, body maxapi.NewMessageBody) {
+	t.Helper()
+	if body.Format != "markdown" {
+		t.Fatalf("expected markdown message format, got %q", body.Format)
 	}
 }
 
@@ -839,6 +846,7 @@ func TestFlowSendDraftStoresDialogPayload(t *testing.T) {
 		t.Fatalf("expected linked raw payload to store real report number, got %q", payloads[1].ReportNumber)
 	}
 	assertAcceptedReportMessage(t, mock.lastText(), "15")
+	assertMarkdownFormat(t, mock.lastMessage())
 }
 
 func TestFlowSendDraftKeepsSuccessWhenRawBackfillFails(t *testing.T) {
@@ -874,6 +882,7 @@ func TestFlowSendDraftKeepsSuccessWhenRawBackfillFails(t *testing.T) {
 		t.Fatalf("expected only the initial raw payload to be stored successfully, got %d", reportMock.count())
 	}
 	assertAcceptedReportMessage(t, mock.lastText(), "15")
+	assertMarkdownFormat(t, mock.lastMessage())
 }
 
 func TestFlowAllowsSecondReportAfterFirstSend(t *testing.T) {
@@ -934,6 +943,7 @@ func TestFlowAllowsSecondReportAfterFirstSend(t *testing.T) {
 	}
 
 	assertAcceptedReportMessage(t, mock.lastText(), "15")
+	assertMarkdownFormat(t, mock.lastMessage())
 }
 
 func TestFlowAllowsFreeformIncidentTime(t *testing.T) {
@@ -1257,6 +1267,7 @@ func TestFlowSendsMediaPayloadToCreateReport(t *testing.T) {
 		t.Fatalf("expected progress message before final confirmation, got %q", texts[len(texts)-2])
 	}
 	assertAcceptedReportMessage(t, mock.lastText(), "15")
+	assertMarkdownFormat(t, mock.lastMessage())
 }
 
 func TestFlowRestoresDraftMediaAfterReload(t *testing.T) {
