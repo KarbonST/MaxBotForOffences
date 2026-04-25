@@ -652,6 +652,12 @@ func TestViolationsListMatchesSpecButtons(t *testing.T) {
 	}
 
 	last := mock.lastMessage()
+	if !strings.Contains(last.Text, "Список нарушений, ответственность за совершение которых предусмотрена региональным законодательством:") {
+		t.Fatalf("expected violations heading from spec, got %q", last.Text)
+	}
+	if !strings.Contains(last.Text, "1 - Тишина и покой в ночное время") {
+		t.Fatalf("expected numbered violations list, got %q", last.Text)
+	}
 	payload := inlineKeyboardPayload(t, last)
 	if len(payload.Buttons) != 2 {
 		t.Fatalf("expected violations keyboard (2 rows), got %+v", payload.Buttons)

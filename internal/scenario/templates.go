@@ -66,9 +66,9 @@ func legalMessage() (string, []maxapi.AttachmentRequest) {
 }
 
 func violationsMessage(items []reference.Item) (string, []maxapi.AttachmentRequest) {
-	lines := []string{"Выберите нарушение или просто посмотрите справочник:"}
+	lines := []string{"Список нарушений, ответственность за совершение которых предусмотрена региональным законодательством:"}
 	for i, item := range items {
-		lines = append(lines, fmt.Sprintf("%d. %s", i+1, item.Name))
+		lines = append(lines, fmt.Sprintf("%d - %s", i+1, item.Name))
 	}
 	return strings.Join(lines, "\n"), violationsKeyboard()
 }
