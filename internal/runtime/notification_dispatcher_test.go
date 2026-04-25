@@ -112,7 +112,7 @@ func (m *notificationSenderMock) SendMessage(_ context.Context, userID int64, bo
 func TestNotificationDispatcherDispatchesGenericNotification(t *testing.T) {
 	store := &notificationStoreMock{
 		items: []reporting.NotificationItem{
-			{ID: 1, MaxUserID: 1001, Notification: "Ваше обращение принято в работу"},
+			{ID: 1, MaxUserID: 1001, Notification: "Ваше сообщение №13 прошло модерацию и находится в статусе «в работе»."},
 		},
 	}
 	sender := &notificationSenderMock{}
@@ -131,8 +131,11 @@ func TestNotificationDispatcherDispatchesGenericNotification(t *testing.T) {
 	if sender.messages[0].userID != 1001 {
 		t.Fatalf("expected user 1001, got %+v", sender.messages[0])
 	}
-	if sender.messages[0].body.Text != "Ваше обращение принято в работу" {
+	if sender.messages[0].body.Text != "Ваше сообщение №13 прошло **модерацию** и находится в статусе «**в работе**»." {
 		t.Fatalf("unexpected message text: %+v", sender.messages[0])
+	}
+	if sender.messages[0].body.Format != "markdown" {
+		t.Fatalf("expected markdown format for status notification, got %+v", sender.messages[0].body)
 	}
 	if len(store.sentIDs) != 1 || store.sentIDs[0] != 1 {
 		t.Fatalf("expected notification 1 to be marked sent, got %+v", store.sentIDs)

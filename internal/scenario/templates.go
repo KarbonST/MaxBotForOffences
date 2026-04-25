@@ -222,7 +222,7 @@ func myReportsListMessage(items []reporting.ReportSummary) string {
 		if value := strings.TrimSpace(item.CategoryName); value != "" {
 			lines = append(lines, fmt.Sprintf("Категория: %s", value))
 		}
-		lines = append(lines, fmt.Sprintf("Статус: %s", humanizeReportStatus(item.Status)))
+		lines = append(lines, fmt.Sprintf("Статус: **%s**", humanizeReportStatus(item.Status)))
 		lines = append(lines, "")
 	}
 	lines = append(lines, "Для просмотра детальной информации по сообщению отправьте номер сообщения в чат.", "", "Сообщения хранятся не более 30 дней.")
@@ -235,9 +235,9 @@ func acceptedReportMessage(item *reporting.CreatedReport) string {
 		"",
 		"Статусы рассмотрения сообщения:",
 		"• **модерация**",
-		"• в работе/отклонено",
-		"• запрошена дополнительная информация (при необходимости)",
-		"• рассмотрено",
+		"• **в работе**/**отклонено**",
+		"• **запрошена дополнительная информация** (при необходимости)",
+		"• **рассмотрено**",
 		"",
 		"При изменении статуса сообщения вам поступит уведомление.",
 		"Сообщение будет храниться не более 30 дней.",
@@ -247,7 +247,7 @@ func acceptedReportMessage(item *reporting.CreatedReport) string {
 func myReportDetailMessage(item *reporting.ReportDetail) string {
 	lines := []string{
 		fmt.Sprintf("Обращение №%s", item.ReportNumber),
-		fmt.Sprintf("Статус: %s", humanizeReportStatus(item.Status)),
+		fmt.Sprintf("Статус: **%s**", humanizeReportStatus(item.Status)),
 		fmt.Sprintf("Дата: %s", formatReportMoment(item.CreatedAt, item.SendedAt)),
 	}
 	if value := strings.TrimSpace(item.CategoryName); value != "" {
@@ -268,10 +268,35 @@ func myReportDetailMessage(item *reporting.ReportDetail) string {
 	if value := strings.TrimSpace(item.AdditionalInfo); value != "" {
 		lines = append(lines, fmt.Sprintf("Доп. информация: %s", value))
 	}
-	if value := strings.TrimSpace(item.Answer); value != "" {
-		lines = append(lines, fmt.Sprintf("Ответ: %s", value))
+	if label, value := reportStatusContext(item); value != "" {
+		lines = append(lines, fmt.Sprintf("%s: %s", label, value))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func reportStatusContext(item *reporting.ReportDetail) (string, string) {
+	answer := strings.TrimSpace(item.Answer)
+	statusContext := strings.TrimSpace(item.StatusContext)
+
+	switch strings.TrimSpace(item.Status) {
+	case "clarification_requested":
+		return "Запрошенное уточнение информации", firstNonEmptyText(statusContext, answer)
+	case "rejected":
+		return "Причина отклонения", firstNonEmptyText(answer, statusContext)
+	case "resolved":
+		return "Результат рассмотрения", firstNonEmptyText(answer, statusContext)
+	default:
+		return "Ответ", answer
+	}
+}
+
+func firstNonEmptyText(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func humanizeReportStatus(status string) string {

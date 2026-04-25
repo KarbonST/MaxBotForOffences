@@ -355,10 +355,6 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		return e.showWelcome(ctx, userID)
 	}
 
-	handled, err := e.handleClarificationMessage(ctx, userID, session, text)
-	if handled || err != nil {
-		return err
-	}
 	e.appendTrace(userID, report.DialogStep{
 		At:              time.Now().UTC(),
 		Kind:            "message",
@@ -366,6 +362,16 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 		Text:            text,
 		AttachmentTypes: attachmentTypes(attachments),
 	})
+
+	handled, err := e.handleReportNavigationMessageBeforeClarification(ctx, userID, session, text)
+	if handled || err != nil {
+		return err
+	}
+
+	handled, err = e.handleClarificationMessage(ctx, userID, session, text)
+	if handled || err != nil {
+		return err
+	}
 
 	if text == "/start" {
 		return e.showWelcome(ctx, userID)
@@ -388,26 +394,8 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 	case stateReportConsent:
 		text, attachments := consentMessage()
 		return e.sendTextMarkdown(ctx, userID, "Для продолжения используйте кнопки ниже.\n\n"+text, attachments)
-	case stateMyReportsList:
-		if len(session.Reports) == 0 {
-			return e.sendText(ctx, userID, "Список обращений устарел. Вернитесь в начало и откройте раздел снова.", myReportsKeyboard())
-		}
-		selected, ok := findReportByNumber(text, session.Reports)
-		if !ok {
-			return e.sendText(ctx, userID, "Отправьте номер сообщения из списка, чтобы посмотреть подробности.", myReportsKeyboard())
-		}
-		detail, err := e.reportReader.GetReportByID(ctx, selected.ID)
-		if err != nil {
-			slog.Error("не удалось загрузить карточку обращения", "user_id", userID, "report_id", selected.ID, "error", err.Error())
-			return e.sendText(ctx, userID, "Не удалось загрузить подробную информацию по обращению. Попробуйте ещё раз.", myReportsKeyboard())
-		}
-		applyState(session, stateMyReportDetail)
-		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
-			return err
-		}
-		return e.sendText(ctx, userID, myReportDetailMessage(detail), myReportDetailKeyboard())
-	case stateMyReportDetail:
-		return e.sendText(ctx, userID, "Для навигации используйте кнопки ниже.", myReportDetailKeyboard())
+	case stateMyReportsList, stateMyReportDetail:
+		return e.handleReportNavigationMessage(ctx, userID, session, text)
 	case stateReportCategory:
 		categories, err := e.loadCategories(ctx)
 		if err != nil {
@@ -546,6 +534,48 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 	}
 }
 
+func (e *Engine) handleReportNavigationMessageBeforeClarification(ctx context.Context, userID int64, session *Session, text string) (bool, error) {
+	switch session.State {
+	case stateMyReportsList, stateMyReportDetail:
+		if text == "/start" {
+			return true, e.showWelcome(ctx, userID)
+		}
+		if strings.EqualFold(text, "меню") {
+			return true, e.showMainMenu(ctx, userID)
+		}
+		return true, e.handleReportNavigationMessage(ctx, userID, session, text)
+	default:
+		return false, nil
+	}
+}
+
+func (e *Engine) handleReportNavigationMessage(ctx context.Context, userID int64, session *Session, text string) error {
+	switch session.State {
+	case stateMyReportsList:
+		if len(session.Reports) == 0 {
+			return e.sendText(ctx, userID, "Список обращений устарел. Вернитесь в начало и откройте раздел снова.", myReportsKeyboard())
+		}
+		selected, ok := findReportByNumber(text, session.Reports)
+		if !ok {
+			return e.sendText(ctx, userID, "Отправьте номер сообщения из списка, чтобы посмотреть подробности.", myReportsKeyboard())
+		}
+		detail, err := e.reportReader.GetReportByID(ctx, selected.ID)
+		if err != nil {
+			slog.Error("не удалось загрузить карточку обращения", "user_id", userID, "report_id", selected.ID, "error", err.Error())
+			return e.sendText(ctx, userID, "Не удалось загрузить подробную информацию по обращению. Попробуйте ещё раз.", myReportsKeyboard())
+		}
+		applyState(session, stateMyReportDetail)
+		if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+			return err
+		}
+		return e.sendTextMarkdown(ctx, userID, myReportDetailMessage(detail), myReportDetailKeyboard())
+	case stateMyReportDetail:
+		return e.sendText(ctx, userID, "Для навигации используйте кнопки ниже.", myReportDetailKeyboard())
+	default:
+		return e.showUnsupportedInput(ctx, userID)
+	}
+}
+
 func (e *Engine) showMainMenu(ctx context.Context, userID int64) error {
 	e.resetSession(userID)
 	session := e.session(userID)
@@ -580,7 +610,7 @@ func (e *Engine) showMyReportsList(ctx context.Context, userID int64) error {
 	if len(items) == 0 {
 		return e.sendText(ctx, userID, "У вас пока нет отправленных обращений.", backToStartKeyboard())
 	}
-	return e.sendText(ctx, userID, myReportsListMessage(items), myReportsKeyboard())
+	return e.sendTextMarkdown(ctx, userID, myReportsListMessage(items), myReportsKeyboard())
 }
 
 func (e *Engine) showWelcome(ctx context.Context, userID int64) error {

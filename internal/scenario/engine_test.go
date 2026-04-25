@@ -174,7 +174,7 @@ func assertAcceptedReportMessage(t *testing.T, text, reportNumber string) {
 	if !strings.Contains(text, "Статусы рассмотрения сообщения:") {
 		t.Fatalf("expected review statuses block in final confirmation, got %q", text)
 	}
-	if !strings.Contains(text, "• **модерация**") || !strings.Contains(text, "• рассмотрено") {
+	if !strings.Contains(text, "• **модерация**") || !strings.Contains(text, "• **рассмотрено**") {
 		t.Fatalf("expected status flow in final confirmation, got %q", text)
 	}
 	if !strings.Contains(text, "При изменении статуса сообщения вам поступит уведомление.") {
@@ -747,6 +747,55 @@ func TestMunicipalityPromptMatchesSpec(t *testing.T) {
 	}
 	if !strings.Contains(last, "Для продолжения отправьте номер муниципалитета.") {
 		t.Fatalf("expected municipality continuation prompt, got %q", last)
+	}
+}
+
+func TestMyReportDetailMessageUsesStatusSpecificContext(t *testing.T) {
+	cases := []struct {
+		name      string
+		detail    reporting.ReportDetail
+		want      string
+		notWanted string
+	}{
+		{
+			name: "resolved uses result label",
+			detail: reporting.ReportDetail{
+				ReportSummary: reporting.ReportSummary{ReportNumber: "21", Status: "resolved"},
+				Answer:        "Нарушение устранено",
+			},
+			want:      "Результат рассмотрения: Нарушение устранено",
+			notWanted: "Ответ:",
+		},
+		{
+			name: "rejected uses reason label",
+			detail: reporting.ReportDetail{
+				ReportSummary: reporting.ReportSummary{ReportNumber: "22", Status: "rejected"},
+				Answer:        "Недостаточно сведений",
+			},
+			want:      "Причина отклонения: Недостаточно сведений",
+			notWanted: "Ответ:",
+		},
+		{
+			name: "clarification uses status context",
+			detail: reporting.ReportDetail{
+				ReportSummary: reporting.ReportSummary{ReportNumber: "23", Status: "clarification_requested"},
+				StatusContext: "Уточните адрес дома",
+			},
+			want:      "Запрошенное уточнение информации: Уточните адрес дома",
+			notWanted: "Ответ:",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			text := myReportDetailMessage(&tc.detail)
+			if !strings.Contains(text, tc.want) {
+				t.Fatalf("expected %q in detail text, got %q", tc.want, text)
+			}
+			if tc.notWanted != "" && strings.Contains(text, tc.notWanted) {
+				t.Fatalf("did not expect %q in detail text, got %q", tc.notWanted, text)
+			}
+		})
 	}
 }
 
@@ -1403,7 +1452,7 @@ func TestFlowMyReportsShowsListAndDetails(t *testing.T) {
 	if !strings.Contains(mock.lastText(), "Категория: Парковка") {
 		t.Fatalf("expected category in list, got %q", mock.lastText())
 	}
-	if !strings.Contains(mock.lastText(), "Статус: В работе") {
+	if !strings.Contains(mock.lastText(), "Статус: **В работе**") {
 		t.Fatalf("expected status line in list, got %q", mock.lastText())
 	}
 	if !strings.Contains(mock.lastText(), "Для просмотра детальной информации по сообщению отправьте номер сообщения в чат.") {
@@ -1413,6 +1462,7 @@ func TestFlowMyReportsShowsListAndDetails(t *testing.T) {
 		t.Fatalf("expected retention note in list, got %q", mock.lastText())
 	}
 	listKeyboard := inlineKeyboardPayload(t, mock.lastMessage())
+	assertMarkdownFormat(t, mock.lastMessage())
 	if len(listKeyboard.Buttons) != 1 || listKeyboard.Buttons[0][0].Text != "Вернуться в начало" {
 		t.Fatalf("expected only back-to-start button in list, got %+v", listKeyboard.Buttons)
 	}
@@ -1420,6 +1470,7 @@ func TestFlowMyReportsShowsListAndDetails(t *testing.T) {
 	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "16")); err != nil {
 		t.Fatalf("HandleUpdate() error = %v", err)
 	}
+	assertMarkdownFormat(t, mock.lastMessage())
 
 	if !strings.Contains(mock.lastText(), "Обращение №16") {
 		t.Fatalf("expected selected report detail, got %q", mock.lastText())
@@ -1480,9 +1531,11 @@ func TestFlowMyReportsDetailBackReturnsToList(t *testing.T) {
 	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb1", "menu:my_reports")); err != nil {
 		t.Fatalf("HandleUpdate() error = %v", err)
 	}
+	assertMarkdownFormat(t, mock.lastMessage())
 	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "15")); err != nil {
 		t.Fatalf("HandleUpdate() error = %v", err)
 	}
+	assertMarkdownFormat(t, mock.lastMessage())
 	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb2", "reports:back")); err != nil {
 		t.Fatalf("HandleUpdate() error = %v", err)
 	}
@@ -1506,6 +1559,140 @@ func TestFlowMyReportsEmpty(t *testing.T) {
 
 	if !strings.Contains(mock.lastText(), "У вас пока нет отправленных обращений.") {
 		t.Fatalf("expected empty reports message, got %q", mock.lastText())
+	}
+}
+
+func TestClarificationAllowsOpeningReportDetailFromMyReports(t *testing.T) {
+	mock := &senderMock{}
+	readerMock := &reportReaderMock{
+		items: []reporting.ReportSummary{
+			{
+				ID:           15,
+				ReportNumber: "15",
+				MaxUserID:    1402,
+				Status:       "clarification_requested",
+				CreatedAt:    time.Date(2026, time.April, 25, 12, 0, 0, 0, time.UTC),
+			},
+		},
+		details: map[int64]*reporting.ReportDetail{
+			15: {
+				ReportSummary: reporting.ReportSummary{
+					ID:               15,
+					ReportNumber:     "15",
+					MaxUserID:        1402,
+					Status:           "clarification_requested",
+					CategoryName:     "Тишина",
+					MunicipalityName: "Волгоград",
+					CreatedAt:        time.Date(2026, time.April, 25, 12, 0, 0, 0, time.UTC),
+				},
+				StatusContext: "Уточните адрес дома.",
+			},
+		},
+	}
+	clarifications := &clarificationStoreMock{
+		prompt: &reporting.ClarificationPrompt{
+			ID:               93,
+			MessageID:        15,
+			NotificationID:   803,
+			NotificationText: "По сообщению №15 нужно уточнить адрес.",
+			Status:           reporting.RequestStatusNew,
+			CreatedAt:        time.Now().UTC(),
+		},
+	}
+	engine := New(
+		mock,
+		referenceProviderMock{},
+		WithReportReader(readerMock),
+		WithClarificationStore(clarifications),
+	)
+
+	userID := int64(1402)
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb1", "menu:my_reports")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "15")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	assertMarkdownFormat(t, mock.lastMessage())
+	if len(clarifications.answerReqs) != 0 {
+		t.Fatalf("expected report number not to be treated as clarification answer, got %+v", clarifications.answerReqs)
+	}
+	if !strings.Contains(mock.lastText(), "Обращение №15") {
+		t.Fatalf("expected report detail to be opened, got %q", mock.lastText())
+	}
+	if !strings.Contains(mock.lastText(), "Запрошенное уточнение информации: Уточните адрес дома.") {
+		t.Fatalf("expected clarification context in report detail, got %q", mock.lastText())
+	}
+	session := engine.session(userID)
+	if session.State != stateMyReportDetail {
+		t.Fatalf("expected state %q, got %q", stateMyReportDetail, session.State)
+	}
+}
+
+func TestClarificationDoesNotStealTextInMyReportDetail(t *testing.T) {
+	mock := &senderMock{}
+	readerMock := &reportReaderMock{
+		items: []reporting.ReportSummary{
+			{
+				ID:           16,
+				ReportNumber: "16",
+				MaxUserID:    1403,
+				Status:       "clarification_requested",
+				CreatedAt:    time.Date(2026, time.April, 25, 12, 0, 0, 0, time.UTC),
+			},
+		},
+		details: map[int64]*reporting.ReportDetail{
+			16: {
+				ReportSummary: reporting.ReportSummary{
+					ID:           16,
+					ReportNumber: "16",
+					MaxUserID:    1403,
+					Status:       "clarification_requested",
+					CreatedAt:    time.Date(2026, time.April, 25, 12, 0, 0, 0, time.UTC),
+				},
+				StatusContext: "Уточните ориентир.",
+			},
+		},
+	}
+	clarifications := &clarificationStoreMock{
+		prompt: &reporting.ClarificationPrompt{
+			ID:               94,
+			MessageID:        16,
+			NotificationID:   804,
+			NotificationText: "По сообщению №16 нужно уточнить ориентир.",
+			Status:           reporting.RequestStatusNew,
+			CreatedAt:        time.Now().UTC(),
+		},
+	}
+	engine := New(
+		mock,
+		referenceProviderMock{},
+		WithReportReader(readerMock),
+		WithClarificationStore(clarifications),
+	)
+
+	userID := int64(1403)
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb1", "menu:my_reports")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "16")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+	assertMarkdownFormat(t, mock.lastMessage())
+	if err := engine.HandleUpdate(context.Background(), textUpdate(userID, "какой-то текст")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	if len(clarifications.answerReqs) != 0 {
+		t.Fatalf("expected text in report detail not to be treated as clarification answer, got %+v", clarifications.answerReqs)
+	}
+	if mock.lastText() != "Для навигации используйте кнопки ниже." {
+		t.Fatalf("expected detail navigation hint, got %q", mock.lastText())
+	}
+	session := engine.session(userID)
+	if session.State != stateMyReportDetail {
+		t.Fatalf("expected state %q, got %q", stateMyReportDetail, session.State)
 	}
 }
 

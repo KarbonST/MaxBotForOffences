@@ -792,6 +792,7 @@ func (s *PostgresStore) GetReportByID(ctx context.Context, id int64) (*ReportDet
 	var sendedAt sql.NullTime
 	var answer sql.NullString
 	var additionalInfo sql.NullString
+	var statusContext sql.NullString
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT
@@ -812,11 +813,29 @@ func (s *PostgresStore) GetReportByID(ctx context.Context, id int64) (*ReportDet
 			m.phone,
 			m.incident_time,
 			m.additional_info,
-			m.answer
+			m.answer,
+			status_meta.status_context
 		FROM messages m
 		JOIN users u ON u.id = m.user_id
 		LEFT JOIN categories c ON c.id = m.category_id
 		LEFT JOIN municipalities mn ON mn.id = m.municipality_id
+		LEFT JOIN LATERAL (
+			SELECT NULLIF(BTRIM(COALESCE(
+				to_jsonb(mh)->>'comments',
+				to_jsonb(mh)->>'comment',
+				un.notification
+			)), '') AS status_context
+			FROM messages_history mh
+			LEFT JOIN user_notifications un ON un.id = mh.notification_id
+			WHERE mh.message_id = m.id
+			  AND mh.event_type = 'status'
+			  AND COALESCE(
+			  	to_jsonb(mh)->>'new_value',
+			  	to_jsonb(mh)->'value'->>'new_value'
+			  ) = m.status::text
+			ORDER BY mh.date DESC, mh.id DESC
+			LIMIT 1
+		) AS status_meta ON TRUE
 		WHERE m.id = $1
 	`, id).Scan(
 		&detail.ID,
@@ -837,6 +856,7 @@ func (s *PostgresStore) GetReportByID(ctx context.Context, id int64) (*ReportDet
 		&detail.IncidentTime,
 		&additionalInfo,
 		&answer,
+		&statusContext,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -852,6 +872,7 @@ func (s *PostgresStore) GetReportByID(ctx context.Context, id int64) (*ReportDet
 	}
 	detail.AdditionalInfo = additionalInfo.String
 	detail.Answer = answer.String
+	detail.StatusContext = statusContext.String
 	return &detail, nil
 }
 

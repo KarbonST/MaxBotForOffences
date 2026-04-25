@@ -261,11 +261,29 @@ func TestPostgresStoreGetReportByIDNotFound(t *testing.T) {
 			m.phone,
 			m.incident_time,
 			m.additional_info,
-			m.answer
+			m.answer,
+			status_meta.status_context
 		FROM messages m
 		JOIN users u ON u.id = m.user_id
 		LEFT JOIN categories c ON c.id = m.category_id
 		LEFT JOIN municipalities mn ON mn.id = m.municipality_id
+		LEFT JOIN LATERAL (
+			SELECT NULLIF(BTRIM(COALESCE(
+				to_jsonb(mh)->>'comments',
+				to_jsonb(mh)->>'comment',
+				un.notification
+			)), '') AS status_context
+			FROM messages_history mh
+			LEFT JOIN user_notifications un ON un.id = mh.notification_id
+			WHERE mh.message_id = m.id
+			  AND mh.event_type = 'status'
+			  AND COALESCE(
+			  	to_jsonb(mh)->>'new_value',
+			  	to_jsonb(mh)->'value'->>'new_value'
+			  ) = m.status::text
+			ORDER BY mh.date DESC, mh.id DESC
+			LIMIT 1
+		) AS status_meta ON TRUE
 		WHERE m.id = $1
 	`)).
 		WithArgs(int64(99)).
@@ -277,6 +295,86 @@ func TestPostgresStoreGetReportByIDNotFound(t *testing.T) {
 	}
 	if err != ErrNotFound {
 		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestPostgresStoreGetReportByIDLoadsStatusContext(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	store := &PostgresStore{db: db}
+
+	createdAt := time.Date(2026, time.April, 25, 10, 0, 0, 0, time.UTC)
+	sendedAt := time.Date(2026, time.April, 25, 10, 5, 0, 0, time.UTC)
+	updatedAt := time.Date(2026, time.April, 25, 11, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT
+			m.id,
+			u.id,
+			u.max_id,
+			c.id,
+			COALESCE(c.name, ''),
+			mn.id,
+			COALESCE(mn.name, ''),
+			m.status::text,
+			m.stage::text,
+			m.description,
+			m.address,
+			m.created_at,
+			m.sended_at,
+			m.updated_at,
+			m.phone,
+			m.incident_time,
+			m.additional_info,
+			m.answer,
+			status_meta.status_context
+		FROM messages m
+		JOIN users u ON u.id = m.user_id
+		LEFT JOIN categories c ON c.id = m.category_id
+		LEFT JOIN municipalities mn ON mn.id = m.municipality_id
+		LEFT JOIN LATERAL (
+			SELECT NULLIF(BTRIM(COALESCE(
+				to_jsonb(mh)->>'comments',
+				to_jsonb(mh)->>'comment',
+				un.notification
+			)), '') AS status_context
+			FROM messages_history mh
+			LEFT JOIN user_notifications un ON un.id = mh.notification_id
+			WHERE mh.message_id = m.id
+			  AND mh.event_type = 'status'
+			  AND COALESCE(
+			  	to_jsonb(mh)->>'new_value',
+			  	to_jsonb(mh)->'value'->>'new_value'
+			  ) = m.status::text
+			ORDER BY mh.date DESC, mh.id DESC
+			LIMIT 1
+		) AS status_meta ON TRUE
+		WHERE m.id = $1
+	`)).
+		WithArgs(int64(15)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "user_id", "max_id", "category_id", "category_name", "municipality_id", "municipality_name",
+			"status", "stage", "description", "address", "created_at", "sended_at", "updated_at",
+			"phone", "incident_time", "additional_info", "answer", "status_context",
+		}).AddRow(
+			int64(15), int64(1), int64(777), 11, "Шум", 21, "Волгоград",
+			"clarification_requested", "sended", "Описание", "ул. Ленина, 2", createdAt, sendedAt, updatedAt,
+			"9991234567", "ночью", "Доп", "", "Уточните адрес дома",
+		))
+
+	detail, err := store.GetReportByID(context.Background(), 15)
+	if err != nil {
+		t.Fatalf("GetReportByID() error = %v", err)
+	}
+	if detail.StatusContext != "Уточните адрес дома" {
+		t.Fatalf("expected status context to be loaded, got %q", detail.StatusContext)
+	}
+	if detail.Answer != "" {
+		t.Fatalf("expected empty answer, got %q", detail.Answer)
 	}
 }
 

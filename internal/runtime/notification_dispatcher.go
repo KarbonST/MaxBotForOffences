@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"max_bot/internal/maxapi"
@@ -112,10 +113,16 @@ func (d *NotificationDispatcher) dispatchOne(ctx context.Context, item reporting
 		return nil
 	}
 
-	if err := d.sender.SendMessage(ctx, item.MaxUserID, maxapi.NewMessageBody{
+	body := maxapi.NewMessageBody{
 		Text:        item.Notification,
 		Attachments: attachments,
-	}); err != nil {
+	}
+	if formattedText, ok := highlightNotificationStatuses(item.Notification); ok {
+		body.Text = formattedText
+		body.Format = "markdown"
+	}
+
+	if err := d.sender.SendMessage(ctx, item.MaxUserID, body); err != nil {
 		_ = d.markNotificationError(ctx, item.ID, item.MaxUserID, err)
 		return err
 	}
@@ -220,4 +227,26 @@ func clarificationNotificationKeyboard() []maxapi.AttachmentRequest {
 			},
 		},
 	}
+}
+
+func highlightNotificationStatuses(text string) (string, bool) {
+	replacer := strings.NewReplacer(
+		"прошло модерацию", "прошло **модерацию**",
+		"«модерация»", "«**модерация**»",
+		"«в работе»", "«**в работе**»",
+		"«отклонено»", "«**отклонено**»",
+		"«рассмотрено»", "«**рассмотрено**»",
+		"«запрошено уточнение»", "«**запрошено уточнение**»",
+		"статусе модерация", "статусе **модерация**",
+		"статусе в работе", "статусе **в работе**",
+		"статусе отклонено", "статусе **отклонено**",
+		"статусе рассмотрено", "статусе **рассмотрено**",
+		"статусе запрошено уточнение", "статусе **запрошено уточнение**",
+		" отклонено по следующей причине", " **отклонено** по следующей причине",
+		" рассмотрено.", " **рассмотрено**.",
+		" рассмотрено\n", " **рассмотрено**\n",
+	)
+
+	formatted := replacer.Replace(text)
+	return formatted, formatted != text
 }

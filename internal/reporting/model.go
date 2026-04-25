@@ -93,6 +93,7 @@ type ReportDetail struct {
 	IncidentTime   string `json:"incident_time"`
 	AdditionalInfo string `json:"additional_info,omitempty"`
 	Answer         string `json:"answer,omitempty"`
+	StatusContext  string `json:"status_context,omitempty"`
 }
 
 type ConversationState struct {
