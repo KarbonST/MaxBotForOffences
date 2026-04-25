@@ -174,7 +174,10 @@ func assertAcceptedReportMessage(t *testing.T, text, reportNumber string) {
 	if !strings.Contains(text, "Статусы рассмотрения сообщения:") {
 		t.Fatalf("expected review statuses block in final confirmation, got %q", text)
 	}
-	if !strings.Contains(text, "• **модерация**") || !strings.Contains(text, "• **рассмотрено**") {
+	if !strings.Contains(text, "• **модерация**") || !strings.Contains(text, "• рассмотрено") {
+		t.Fatalf("expected status flow in final confirmation, got %q", text)
+	}
+	if strings.Contains(text, "• **в работе**/**отклонено**") || strings.Contains(text, "• **рассмотрено**") {
 		t.Fatalf("expected status flow in final confirmation, got %q", text)
 	}
 	if !strings.Contains(text, "При изменении статуса сообщения вам поступит уведомление.") {
