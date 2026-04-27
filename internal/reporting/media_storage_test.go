@@ -200,6 +200,17 @@ func TestStoreMediaFilesSetsExpectedPermissions(t *testing.T) {
 		t.Fatalf("storeMediaFiles() error = %v", err)
 	}
 
+	rootInfo, err := os.Stat(tempDir)
+	if err != nil {
+		t.Fatalf("Stat() root directory error = %v", err)
+	}
+	if rootInfo.Mode().Perm() != 0o775 {
+		t.Fatalf("expected root directory perms 0775, got %o", rootInfo.Mode().Perm())
+	}
+	if runtime.GOOS == "linux" && rootInfo.Mode()&os.ModeSetgid == 0 {
+		t.Fatalf("expected root directory setgid bit, got mode %v", rootInfo.Mode())
+	}
+
 	dirInfo, err := os.Stat(filepath.Join(tempDir, "42"))
 	if err != nil {
 		t.Fatalf("Stat() directory error = %v", err)

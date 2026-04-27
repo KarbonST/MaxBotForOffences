@@ -338,11 +338,11 @@ func (s *PostgresStore) storeMediaFiles(ctx context.Context, tx *sql.Tx, message
 
 	directoryDisk := filepath.Join(s.mediaRootDir, strconv.FormatInt(messageID, 10))
 	directoryDB := path.Join(s.mediaRootDir, strconv.FormatInt(messageID, 10))
-	if err := os.MkdirAll(directoryDisk, mediaDirectoryMode); err != nil {
-		return fmt.Errorf("create media directory: %w", err)
+	if err := ensureMediaDirectory(s.mediaRootDir); err != nil {
+		return fmt.Errorf("prepare media root directory: %w", err)
 	}
-	if err := os.Chmod(directoryDisk, mediaDirectoryMode); err != nil {
-		return fmt.Errorf("set media directory permissions: %w", err)
+	if err := ensureMediaDirectory(directoryDisk); err != nil {
+		return fmt.Errorf("prepare media directory: %w", err)
 	}
 
 	for index, item := range items {
@@ -367,6 +367,16 @@ func (s *PostgresStore) storeMediaFiles(ctx context.Context, tx *sql.Tx, message
 		}
 	}
 
+	return nil
+}
+
+func ensureMediaDirectory(directory string) error {
+	if err := os.MkdirAll(directory, mediaDirectoryMode); err != nil {
+		return err
+	}
+	if err := os.Chmod(directory, mediaDirectoryMode); err != nil {
+		return err
+	}
 	return nil
 }
 
