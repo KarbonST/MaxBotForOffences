@@ -116,7 +116,8 @@ func TestNotificationDispatcherDispatchesGenericNotification(t *testing.T) {
 		},
 	}
 	sender := &notificationSenderMock{}
-	dispatcher := NewNotificationDispatcher(store, &clarificationStoreMock{}, &conversationStoreMock{}, sender, NotificationDispatcherConfig{
+	conversations := &conversationStoreMock{}
+	dispatcher := NewNotificationDispatcher(store, &clarificationStoreMock{}, conversations, sender, NotificationDispatcherConfig{
 		Interval:  10 * time.Millisecond,
 		BatchSize: 10,
 	}, nil)
@@ -137,11 +138,55 @@ func TestNotificationDispatcherDispatchesGenericNotification(t *testing.T) {
 	if sender.messages[0].body.Format != "markdown" {
 		t.Fatalf("expected markdown format for status notification, got %+v", sender.messages[0].body)
 	}
+	if len(sender.messages[0].body.Attachments) != 0 {
+		t.Fatalf("did not expect attachments for generic notification, got %+v", sender.messages[0].body.Attachments)
+	}
+	if len(conversations.reqs) != 0 {
+		t.Fatalf("did not expect conversation stage changes for generic notification, got %+v", conversations.reqs)
+	}
 	if len(store.sentIDs) != 1 || store.sentIDs[0] != 1 {
 		t.Fatalf("expected notification 1 to be marked sent, got %+v", store.sentIDs)
 	}
 	if len(store.errorIDs) != 0 {
 		t.Fatalf("did not expect error notifications, got %+v", store.errorIDs)
+	}
+}
+
+func TestNotificationDispatcherKeepsDraftFlowOnGenericNotification(t *testing.T) {
+	store := &notificationStoreMock{
+		items: []reporting.NotificationItem{
+			{ID: 10, MaxUserID: 1011, Notification: "Ваше сообщение №21 находится в статусе «в работе»."},
+		},
+	}
+	conversations := &conversationStoreMock{
+		state: &reporting.ConversationState{
+			UserID:    21,
+			MaxUserID: 1011,
+			Stage:     reporting.UserStageFillingReport,
+			ActiveDraft: &reporting.DraftMessage{
+				ID:    99,
+				Stage: reporting.MessageStageDescription,
+			},
+		},
+	}
+	sender := &notificationSenderMock{}
+	dispatcher := NewNotificationDispatcher(store, &clarificationStoreMock{}, conversations, sender, NotificationDispatcherConfig{
+		Interval:  10 * time.Millisecond,
+		BatchSize: 10,
+	}, nil)
+
+	if err := dispatcher.dispatchBatch(context.Background()); err != nil {
+		t.Fatalf("dispatchBatch() error = %v", err)
+	}
+
+	if len(sender.messages) != 1 {
+		t.Fatalf("expected one sent message, got %d", len(sender.messages))
+	}
+	if len(sender.messages[0].body.Attachments) != 0 {
+		t.Fatalf("did not expect buttons while user fills draft, got %+v", sender.messages[0].body.Attachments)
+	}
+	if len(conversations.reqs) != 0 {
+		t.Fatalf("did not expect draft stage override for passive notification, got %+v", conversations.reqs)
 	}
 }
 
