@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -31,7 +32,7 @@ type PostgresStore struct {
 
 const (
 	defaultMediaRootDir             = "/var/www/violations-upload"
-	mediaDirectoryMode  os.FileMode = 0o2775
+	mediaDirectoryMode  os.FileMode = os.ModeSetgid | 0o775
 	mediaFileMode       os.FileMode = 0o664
 )
 
@@ -338,6 +339,9 @@ func (s *PostgresStore) storeMediaFiles(ctx context.Context, tx *sql.Tx, message
 
 	directoryDisk := filepath.Join(s.mediaRootDir, strconv.FormatInt(messageID, 10))
 	directoryDB := path.Join(s.mediaRootDir, strconv.FormatInt(messageID, 10))
+	if envBoolDefaultFalse("REPORT_MEDIA_DEBUG") {
+		slog.Info("начинаем сохранение вложений обращения", "message_id", messageID, "items", len(items), "directory_disk", directoryDisk, "directory_db", directoryDB)
+	}
 	if err := ensureMediaDirectory(s.mediaRootDir); err != nil {
 		return fmt.Errorf("prepare media root directory: %w", err)
 	}
@@ -359,6 +363,9 @@ func (s *PostgresStore) storeMediaFiles(ctx context.Context, tx *sql.Tx, message
 		}
 
 		filePathDB := path.Join(directoryDB, fileName)
+		if envBoolDefaultFalse("REPORT_MEDIA_DEBUG") {
+			slog.Info("вложение сохранено на диск", "message_id", messageID, "index", index+1, "type", item.Type, "file_path_disk", filePathDisk, "file_path_db", filePathDB, "bytes", len(content), "mime_type", pickMIME(mimeType, ext))
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO files (message_id, path, file_name, file_size, mime_type)
 			VALUES ($1, $2, $3, $4, $5)

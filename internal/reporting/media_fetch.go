@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	neturl "net/url"
@@ -20,6 +21,7 @@ type mediaFetcher struct {
 	httpClient *http.Client
 	apiBaseURL string
 	botToken   string
+	debug      bool
 }
 
 type mediaPayload struct {
@@ -52,17 +54,21 @@ func newMediaFetcherFromEnv() *mediaFetcher {
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		apiBaseURL: apiBaseURL,
 		botToken:   strings.TrimSpace(os.Getenv("MAX_BOT_TOKEN")),
+		debug:      envBoolDefaultFalse("REPORT_MEDIA_DEBUG"),
 	}
 }
 
 func (f *mediaFetcher) fetch(ctx context.Context, item MediaAttachment) ([]byte, string, string, error) {
 	downloadURL, err := f.resolveDownloadURL(ctx, item)
 	if err != nil {
+		f.debugLog("не удалось определить URL скачивания вложения", "type", item.Type, "error", err.Error())
 		return nil, "", "", err
 	}
 	if strings.TrimSpace(downloadURL) == "" {
+		f.debugLog("получен пустой URL скачивания вложения", "type", item.Type)
 		return nil, "", "", fmt.Errorf("media download URL is empty")
 	}
+	f.debugLog("начинаем скачивание вложения", "type", item.Type, "download_url", summarizeURL(downloadURL))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
@@ -74,9 +80,11 @@ func (f *mediaFetcher) fetch(ctx context.Context, item MediaAttachment) ([]byte,
 
 	resp, err := f.httpClient.Do(req)
 	if err != nil {
+		f.debugLog("ошибка запроса на скачивание вложения", "type", item.Type, "download_url", summarizeURL(downloadURL), "error", err.Error())
 		return nil, "", "", fmt.Errorf("download media %q: %w", downloadURL, err)
 	}
 	defer resp.Body.Close()
+	f.debugLog("получен ответ на скачивание вложения", "type", item.Type, "download_url", summarizeURL(downloadURL), "status_code", resp.StatusCode)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, "", "", fmt.Errorf("download media %q returned %d", downloadURL, resp.StatusCode)
@@ -91,6 +99,7 @@ func (f *mediaFetcher) fetch(ctx context.Context, item MediaAttachment) ([]byte,
 	if parsed, _, err := mime.ParseMediaType(mimeType); err == nil {
 		mimeType = parsed
 	}
+	f.debugLog("вложение скачано", "type", item.Type, "download_url", summarizeURL(downloadURL), "bytes", len(content), "mime_type", mimeType)
 
 	return content, mimeType, mediaExtFromURLOrMIME(downloadURL, mimeType), nil
 }
@@ -98,16 +107,24 @@ func (f *mediaFetcher) fetch(ctx context.Context, item MediaAttachment) ([]byte,
 func (f *mediaFetcher) resolveDownloadURL(ctx context.Context, item MediaAttachment) (string, error) {
 	payload, err := parseMediaPayload(item.Payload)
 	if err != nil {
+		f.debugLog("не удалось разобрать payload вложения", "type", item.Type, "error", err.Error())
 		return "", err
 	}
+	f.debugLog("разобран payload вложения", "type", item.Type, "payload_url", summarizeURL(payload.URL), "token", shortenToken(payload.Token))
 
 	if strings.EqualFold(strings.TrimSpace(item.Type), "video") && payload.Token != "" {
+		f.debugLog("пытаемся получить прямой mp4 URL для видео", "token", shortenToken(payload.Token))
 		videoURL, err := f.resolveVideoURL(ctx, payload.Token)
 		if err == nil && strings.TrimSpace(videoURL) != "" {
+			f.debugLog("получен прямой mp4 URL для видео", "token", shortenToken(payload.Token), "video_url", summarizeURL(videoURL))
 			return videoURL, nil
+		}
+		if err != nil {
+			f.debugLog("не удалось получить прямой mp4 URL для видео, используем payload URL", "token", shortenToken(payload.Token), "error", err.Error())
 		}
 	}
 
+	f.debugLog("используем payload URL для скачивания вложения", "type", item.Type, "payload_url", summarizeURL(payload.URL))
 	return payload.URL, nil
 }
 
@@ -130,6 +147,7 @@ func (f *mediaFetcher) resolveVideoURL(ctx context.Context, videoToken string) (
 	}
 
 	endpoint := strings.TrimRight(f.apiBaseURL, "/") + "/videos/" + neturl.PathEscape(videoToken)
+	f.debugLog("запрашиваем детали видео у MAX API", "token", shortenToken(videoToken), "endpoint", summarizeURL(endpoint))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", fmt.Errorf("create video details request: %w", err)
@@ -138,9 +156,11 @@ func (f *mediaFetcher) resolveVideoURL(ctx context.Context, videoToken string) (
 
 	resp, err := f.httpClient.Do(req)
 	if err != nil {
+		f.debugLog("ошибка запроса деталей видео", "token", shortenToken(videoToken), "endpoint", summarizeURL(endpoint), "error", err.Error())
 		return "", fmt.Errorf("request video details: %w", err)
 	}
 	defer resp.Body.Close()
+	f.debugLog("получен ответ от MAX API по деталям видео", "token", shortenToken(videoToken), "endpoint", summarizeURL(endpoint), "status_code", resp.StatusCode)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("video details returned %d", resp.StatusCode)
@@ -164,11 +184,49 @@ func (f *mediaFetcher) resolveVideoURL(ctx context.Context, videoToken string) (
 		details.URLs.MP4144,
 	} {
 		if strings.TrimSpace(candidate) != "" {
+			f.debugLog("выбран URL видео для скачивания", "token", shortenToken(videoToken), "video_url", summarizeURL(candidate))
 			return candidate, nil
 		}
 	}
 
 	return "", fmt.Errorf("video details do not contain downloadable mp4 urls")
+}
+
+func (f *mediaFetcher) debugLog(msg string, args ...any) {
+	if f == nil || !f.debug {
+		return
+	}
+	slog.Info(msg, args...)
+}
+
+func summarizeURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	parsed, err := neturl.Parse(trimmed)
+	if err != nil || parsed.Host == "" {
+		if len(trimmed) > 160 {
+			return trimmed[:160] + "..."
+		}
+		return trimmed
+	}
+	result := parsed.Scheme + "://" + parsed.Host + parsed.Path
+	if result == "://" {
+		return trimmed
+	}
+	return result
+}
+
+func shortenToken(token string) string {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return ""
+	}
+	if len(trimmed) <= 10 {
+		return trimmed
+	}
+	return trimmed[:4] + "..." + trimmed[len(trimmed)-4:]
 }
 
 func mediaExtFromURLOrMIME(rawURL, mimeType string) string {

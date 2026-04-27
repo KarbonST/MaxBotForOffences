@@ -34,6 +34,7 @@ services:
       MAX_BOT_TOKEN: ${MAX_BOT_TOKEN:-}
       MAX_API_BASE: ${MAX_API_BASE:-https://platform-api.max.ru}
       MEDIA_UPLOAD_ROOT: ${MEDIA_UPLOAD_ROOT:-/var/www/violations-upload}
+      REPORT_MEDIA_DEBUG: ${REPORT_MEDIA_DEBUG:-0}
       CORE_API_ADDR: :8091
       CORE_API_READ_TIMEOUT: ${CORE_API_READ_TIMEOUT:-30s}
       CORE_API_WRITE_TIMEOUT: ${CORE_API_WRITE_TIMEOUT:-60s}

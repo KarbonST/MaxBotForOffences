@@ -42,6 +42,15 @@ func TestMaterializeAttachmentFallsBackToRawPayload(t *testing.T) {
 	}
 }
 
+func TestMediaDirectoryModeIncludesSetgidBit(t *testing.T) {
+	if mediaDirectoryMode&os.ModeSetgid == 0 {
+		t.Fatalf("expected media directory mode to include setgid, got %v", mediaDirectoryMode)
+	}
+	if mediaDirectoryMode.Perm() != 0o775 {
+		t.Fatalf("expected media directory permissions 0775, got %o", mediaDirectoryMode.Perm())
+	}
+}
+
 func TestMaterializeAttachmentDownloadsPhotoFromPayloadURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/media/photo.jpg" {
