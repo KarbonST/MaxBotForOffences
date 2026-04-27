@@ -144,6 +144,63 @@ func TestMaterializeAttachmentDownloadsVideoViaDetailsEndpoint(t *testing.T) {
 	}
 }
 
+func TestMaterializeAttachmentPrefersHTTPSCandidateForVideoDownload(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/videos/video_token_2":
+			if got := r.Header.Get("Authorization"); got != "bot-token" {
+				t.Fatalf("expected Authorization header for video details, got %q", got)
+			}
+			host := strings.TrimPrefix(server.URL, "https://")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"token":"video_token_2","urls":{"mp4_720":"http://` + host + `/media/video.mp4"}}`))
+		case "/media/video.mp4":
+			if r.TLS == nil {
+				t.Fatal("expected media download over https")
+			}
+			if got := r.Header.Get("Authorization"); got != "bot-token" {
+				t.Fatalf("expected Authorization header for media download, got %q", got)
+			}
+			w.Header().Set("Content-Type", "video/mp4")
+			_, _ = w.Write([]byte("mp4-binary-secure"))
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	raw := json.RawMessage(`{"url":"http://example.invalid/original","token":"video_token_2"}`)
+	store := &PostgresStore{
+		mediaFetcher: &mediaFetcher{
+			httpClient: server.Client(),
+			apiBaseURL: server.URL,
+			botToken:   "bot-token",
+		},
+	}
+
+	content, fileName, mimeType, ext, err := store.materializeAttachment(context.Background(), MediaAttachment{
+		Type:    "video",
+		Payload: raw,
+	}, 43, 1)
+	if err != nil {
+		t.Fatalf("materializeAttachment() error = %v", err)
+	}
+
+	if string(content) != "mp4-binary-secure" {
+		t.Fatalf("expected downloaded secure video content, got %q", string(content))
+	}
+	if fileName != "43_01.mp4" {
+		t.Fatalf("expected generated filename, got %q", fileName)
+	}
+	if mimeType != "video/mp4" {
+		t.Fatalf("expected video/mp4 mime, got %q", mimeType)
+	}
+	if ext != ".mp4" {
+		t.Fatalf("expected .mp4 extension, got %q", ext)
+	}
+}
+
 func TestMaterializeAttachmentReturnsErrorWhenDownloadFails(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "broken", http.StatusBadGateway)
@@ -167,6 +224,19 @@ func TestMaterializeAttachmentReturnsErrorWhenDownloadFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "download media attachment") {
 		t.Fatalf("expected wrapped download error, got %v", err)
+	}
+}
+
+func TestPreferredMediaDownloadURLsPrefersHTTPSForHTTPSource(t *testing.T) {
+	candidates := preferredMediaDownloadURLs("http://vd572.okcdn.ru/path/video.mp4?x=1")
+	if len(candidates) != 2 {
+		t.Fatalf("expected two candidate URLs, got %d", len(candidates))
+	}
+	if candidates[0] != "https://vd572.okcdn.ru/path/video.mp4?x=1" {
+		t.Fatalf("unexpected https candidate %q", candidates[0])
+	}
+	if candidates[1] != "http://vd572.okcdn.ru/path/video.mp4?x=1" {
+		t.Fatalf("unexpected original candidate %q", candidates[1])
 	}
 }
 

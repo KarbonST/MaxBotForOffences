@@ -68,11 +68,41 @@ func (f *mediaFetcher) fetch(ctx context.Context, item MediaAttachment) ([]byte,
 		f.debugLog("получен пустой URL скачивания вложения", "type", item.Type)
 		return nil, "", "", fmt.Errorf("media download URL is empty")
 	}
-	f.debugLog("начинаем скачивание вложения", "type", item.Type, "download_url", summarizeURL(downloadURL))
 
+	candidates := preferredMediaDownloadURLs(downloadURL)
+	if len(candidates) > 1 {
+		f.debugLog("для скачивания вложения подготовлены альтернативные URL", "type", item.Type, "primary_url", summarizeURL(candidates[0]), "fallback_url", summarizeURL(candidates[1]))
+	}
+
+	var lastErr error
+	for index, candidateURL := range candidates {
+		if index == 0 {
+			f.debugLog("начинаем скачивание вложения", "type", item.Type, "download_url", summarizeURL(candidateURL), "attempt", index+1, "attempts_total", len(candidates))
+		} else {
+			f.debugLog("повторная попытка скачивания вложения по резервному URL", "type", item.Type, "download_url", summarizeURL(candidateURL), "attempt", index+1, "attempts_total", len(candidates))
+		}
+
+		content, mimeType, err := f.downloadOnce(ctx, candidateURL, item.Type)
+		if err != nil {
+			lastErr = err
+			f.debugLog("не удалось скачать вложение по URL-кандидату", "type", item.Type, "download_url", summarizeURL(candidateURL), "attempt", index+1, "error", err.Error())
+			continue
+		}
+
+		f.debugLog("вложение скачано", "type", item.Type, "download_url", summarizeURL(candidateURL), "bytes", len(content), "mime_type", mimeType, "attempt", index+1)
+		return content, mimeType, mediaExtFromURLOrMIME(candidateURL, mimeType), nil
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("media download URL is empty")
+	}
+	return nil, "", "", lastErr
+}
+
+func (f *mediaFetcher) downloadOnce(ctx context.Context, downloadURL string, mediaType string) ([]byte, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("create media request: %w", err)
+		return nil, "", fmt.Errorf("create media request: %w", err)
 	}
 	if f.botToken != "" {
 		req.Header.Set("Authorization", f.botToken)
@@ -80,28 +110,27 @@ func (f *mediaFetcher) fetch(ctx context.Context, item MediaAttachment) ([]byte,
 
 	resp, err := f.httpClient.Do(req)
 	if err != nil {
-		f.debugLog("ошибка запроса на скачивание вложения", "type", item.Type, "download_url", summarizeURL(downloadURL), "error", err.Error())
-		return nil, "", "", fmt.Errorf("download media %q: %w", downloadURL, err)
+		f.debugLog("ошибка запроса на скачивание вложения", "type", mediaType, "download_url", summarizeURL(downloadURL), "error", err.Error())
+		return nil, "", fmt.Errorf("download media %q: %w", downloadURL, err)
 	}
 	defer resp.Body.Close()
-	f.debugLog("получен ответ на скачивание вложения", "type", item.Type, "download_url", summarizeURL(downloadURL), "status_code", resp.StatusCode)
+	f.debugLog("получен ответ на скачивание вложения", "type", mediaType, "download_url", summarizeURL(downloadURL), "status_code", resp.StatusCode)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, "", "", fmt.Errorf("download media %q returned %d", downloadURL, resp.StatusCode)
+		return nil, "", fmt.Errorf("download media %q returned %d", downloadURL, resp.StatusCode)
 	}
 
 	content, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("read media body: %w", err)
+		return nil, "", fmt.Errorf("read media body: %w", err)
 	}
 
 	mimeType := strings.TrimSpace(resp.Header.Get("Content-Type"))
 	if parsed, _, err := mime.ParseMediaType(mimeType); err == nil {
 		mimeType = parsed
 	}
-	f.debugLog("вложение скачано", "type", item.Type, "download_url", summarizeURL(downloadURL), "bytes", len(content), "mime_type", mimeType)
 
-	return content, mimeType, mediaExtFromURLOrMIME(downloadURL, mimeType), nil
+	return content, mimeType, nil
 }
 
 func (f *mediaFetcher) resolveDownloadURL(ctx context.Context, item MediaAttachment) (string, error) {
@@ -197,6 +226,29 @@ func (f *mediaFetcher) debugLog(msg string, args ...any) {
 		return
 	}
 	slog.Info(msg, args...)
+}
+
+func preferredMediaDownloadURLs(raw string) []string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	if secure := upgradeToHTTPSURL(trimmed); secure != "" && secure != trimmed {
+		return []string{secure, trimmed}
+	}
+	return []string{trimmed}
+}
+
+func upgradeToHTTPSURL(raw string) string {
+	parsed, err := neturl.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	if !strings.EqualFold(parsed.Scheme, "http") {
+		return ""
+	}
+	parsed.Scheme = "https"
+	return parsed.String()
 }
 
 func summarizeURL(raw string) string {
