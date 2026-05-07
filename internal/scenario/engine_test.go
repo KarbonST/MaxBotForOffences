@@ -139,8 +139,8 @@ func assertMainMenuKeyboard(t *testing.T, body maxapi.NewMessageBody) {
 	}
 
 	payload := inlineKeyboardPayload(t, body)
-	if len(payload.Buttons) != 5 {
-		t.Fatalf("expected 5 rows, got %+v", payload.Buttons)
+	if len(payload.Buttons) != 6 {
+		t.Fatalf("expected 6 rows, got %+v", payload.Buttons)
 	}
 	expected := []struct {
 		text    string
@@ -151,6 +151,7 @@ func assertMainMenuKeyboard(t *testing.T, body maxapi.NewMessageBody) {
 		{text: "Юридическая информация", payload: "menu:legal"},
 		{text: "Мои сообщения", payload: "menu:my_reports"},
 		{text: "О боте", payload: "menu:about"},
+		{text: "Обратная связь", payload: "menu:feedback"},
 	}
 	for i, row := range payload.Buttons {
 		if len(row) != 1 {
@@ -621,7 +622,7 @@ func TestAboutReturnsUserToMainMenuState(t *testing.T) {
 		t.Fatalf("expected about text, got %q", texts[0])
 	}
 	payload := inlineKeyboardPayload(t, mock.lastMessage())
-	if len(payload.Buttons) != 5 {
+	if len(payload.Buttons) != 6 {
 		t.Fatalf("expected main menu keyboard after about, got %+v", payload.Buttons)
 	}
 
@@ -660,6 +661,35 @@ func TestLegalInfoMatchesSpecTextAndButtons(t *testing.T) {
 	session := engine.session(userID)
 	if session.State != stateMainMenu {
 		t.Fatalf("expected state %q after legal info, got %q", stateMainMenu, session.State)
+	}
+}
+
+func TestFeedbackMatchesSpecTextAndButtons(t *testing.T) {
+	mock := &senderMock{}
+	engine := New(mock, referenceProviderMock{})
+	userID := int64(10341)
+
+	if err := engine.HandleUpdate(context.Background(), callbackUpdate(userID, "cb-feedback", "menu:feedback")); err != nil {
+		t.Fatalf("HandleUpdate() error = %v", err)
+	}
+
+	last := mock.lastMessage()
+	if !strings.Contains(last.Text, "Предложения (замечания) по совершенствованию электронного сервиса") {
+		t.Fatalf("expected feedback text, got %q", last.Text)
+	}
+	if !strings.Contains(last.Text, "o_kudlaev@volganet.ru") {
+		t.Fatalf("expected feedback email, got %q", last.Text)
+	}
+	payload := inlineKeyboardPayload(t, last)
+	if len(payload.Buttons) != 1 {
+		t.Fatalf("expected feedback keyboard (1 row), got %+v", payload.Buttons)
+	}
+	if payload.Buttons[0][0].Text != "Вернуться в начало" || payload.Buttons[0][0].Payload != "menu:main" {
+		t.Fatalf("unexpected feedback button: %+v", payload.Buttons[0][0])
+	}
+	session := engine.session(userID)
+	if session.State != stateFeedback {
+		t.Fatalf("expected state %q after feedback, got %q", stateFeedback, session.State)
 	}
 }
 

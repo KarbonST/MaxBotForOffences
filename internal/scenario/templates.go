@@ -33,6 +33,10 @@ func aboutMessage() (string, []maxapi.AttachmentRequest) {
 	return "Данный бот создан для оперативного сбора информации об административных правонарушениях, предусмотренных региональным законодательством (в сфере благоустройства территорий муниципальных образований, обращения с домашними животными, выпаса и прогона сельскохозяйственных животных, торговли вне установленных мест, тишины и покоя граждан и др.).", nil
 }
 
+func feedbackMessage() (string, []maxapi.AttachmentRequest) {
+	return "Предложения (замечания) по совершенствованию электронного сервиса вы можете направить на адрес электронной почты o_kudlaev@volganet.ru", backToStartKeyboard()
+}
+
 func unsupportedInputMessage() (string, []maxapi.AttachmentRequest) {
 	return "Не могу распознать вашу команду, вы будете перенаправлены в главное меню.", nil
 }
@@ -190,6 +194,7 @@ func mainMenuKeyboard() []maxapi.AttachmentRequest {
 			row(cb("Юридическая информация", "menu:legal")),
 			row(cb("Мои сообщения", "menu:my_reports")),
 			row(cb("О боте", "menu:about")),
+			row(cb("Обратная связь", "menu:feedback")),
 		),
 	}
 }

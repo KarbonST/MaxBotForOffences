@@ -269,6 +269,8 @@ func (e *Engine) handleCallback(ctx context.Context, upd maxapi.Update) error {
 		return e.showMainMenu(ctx, userID)
 	case "menu:about":
 		return e.showAbout(ctx, userID)
+	case "menu:feedback":
+		return e.showFeedback(ctx, userID)
 	case "reports:back":
 		return e.showMyReportsList(ctx, userID)
 	case "menu:legal":
@@ -381,6 +383,8 @@ func (e *Engine) handleMessage(ctx context.Context, upd maxapi.Update) error {
 	}
 
 	switch session.State {
+	case stateFeedback:
+		return e.showUnsupportedInput(ctx, userID)
 	case stateLegalInfo:
 		text, attachments := legalMessage()
 		return e.sendTextMarkdown(ctx, userID, "В этом разделе используйте кнопки ниже.\n\n"+text, attachments)
@@ -636,6 +640,16 @@ func (e *Engine) showAbout(ctx context.Context, userID int64) error {
 	}
 	text, _ := aboutMessage()
 	return e.sendText(ctx, userID, text, mainMenuKeyboard())
+}
+
+func (e *Engine) showFeedback(ctx context.Context, userID int64) error {
+	session := e.session(userID)
+	applyState(session, stateFeedback)
+	if err := e.persistStateOrReply(ctx, userID, session, false); err != nil {
+		return err
+	}
+	text, attachments := feedbackMessage()
+	return e.sendText(ctx, userID, text, attachments)
 }
 
 func (e *Engine) showUnsupportedInput(ctx context.Context, userID int64) error {

@@ -6,6 +6,7 @@ type BotState string
 
 const (
 	stateAbout                  BotState = "about"
+	stateFeedback               BotState = "feedback"
 	stateUnsupportedInput       BotState = "unsupported_input"
 	stateLegalInfo              BotState = "legal_info"
 	stateMainMenu               BotState = "main_menu"
